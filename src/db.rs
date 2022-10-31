@@ -1,3 +1,6 @@
+/// Serialize to and from text and bytes formats. Leave further casting to
+/// the caller. In some instances a serialized format is preferred, so don't
+/// force casting into the interface.
 use anyhow::Result;
 use futures::TryStreamExt;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
@@ -25,17 +28,25 @@ impl Db {
             (\
                 `id` TEXT PRIMARY KEY, \
                 `timestamp_millis` BIGINT NOT NULL, \
+                `issuer_did` TEXT NOT NULL, \
                 `activity` TEXT NOT NULL\
             );\
             ",
         )
         .execute(&mut conn)
-        .await
-        .unwrap();
+        .await?;
         sqlx::query(
             "\
             CREATE INDEX IF NOT EXISTS `timestamp_millis` \
             ON `Activities`(`timestamp_millis`);\
+            ",
+        )
+        .execute(&mut conn)
+        .await?;
+        sqlx::query(
+            "\
+            CREATE INDEX IF NOT EXISTS `issuer_did` \
+            ON `Activities`(`issuer_did`);\
             ",
         )
         .execute(&mut conn)
@@ -47,22 +58,53 @@ impl Db {
         &self,
         id: &str,
         timestamp_millis: i64,
+        issuer_did: &str,
         activity: &str,
     ) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
         sqlx::query(
             "\
             INSERT INTO `Activities` \
-            (`id`, `timestamp_millis`, `activity`) \
-            VALUES($1, $2, $3)\
+            (`id`, `timestamp_millis`, `issuer_did`, `activity`) \
+            VALUES($1, $2, $3, $4)\
             ",
         )
         .bind(id)
         .bind(timestamp_millis)
+        .bind(issuer_did)
         .bind(activity)
         .execute(&mut conn)
         .await?;
         Ok(())
+    }
+
+    pub async fn get_issuers_activities(
+        &self,
+        issuers_did: &[impl AsRef<str>],
+        since_timestamp_millis: i64,
+    ) -> Result<Vec<String>> {
+        let mut conn = self.pool.acquire().await?;
+        let parameters = build_in_parameters(issuers_did.len(), Some(2));
+        let query_str = format!(
+            "\
+            SELECT `activity` FROM `Activities` \
+            WHERE `timestamp_millis` > $1 AND `issuer_did` IN ({})
+            ORDER BY `timestamp_millis`;\
+            ",
+            parameters
+        );
+        let mut query = sqlx::query(&query_str);
+        query = query.bind(since_timestamp_millis);
+        for issuer_did in issuers_did {
+            query = query.bind(issuer_did.as_ref());
+        }
+        let mut activities = Vec::new();
+        let mut rows = query.fetch(&mut conn);
+        while let Some(row) = rows.try_next().await? {
+            let activity: &str = row.try_get("activity")?;
+            activities.push(activity.to_string());
+        }
+        Ok(activities)
     }
 
     pub async fn filter_has_activities(
@@ -79,11 +121,9 @@ impl Db {
             ",
             parameters
         );
-        dbg!(&query_str);
         let mut query = sqlx::query(&query_str);
         query = query.bind(since_timestamp_millis);
         for id in ids {
-            dbg!(id.as_ref());
             query = query.bind(id.as_ref());
         }
         let mut filtered_ids = Vec::new();
@@ -110,16 +150,30 @@ mod test {
     #[tokio::test]
     async fn db_puts_activity() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_activity("a:b", 10, "abc").await.unwrap();
+        db.put_activity("a:b", 10, "did:a", "abc").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn db_gets_issuers_activities() {
+        let db = Db::new("sqlite::memory:").await.unwrap();
+        db.put_activity("a:b", 10, "did:key:a", "a1").await.unwrap();
+        db.put_activity("a:c", 11, "did:key:a", "a2").await.unwrap();
+        db.put_activity("a:d", 12, "did:key:b", "a3").await.unwrap();
+        db.put_activity("a:e", 13, "did:key:c", "a4").await.unwrap();
+        let activities = db
+            .get_issuers_activities(&["did:key:a", "did:key:b"], 10)
+            .await
+            .unwrap();
+        assert_eq!(activities, ["a2", "a3"]);
     }
 
     #[tokio::test]
     async fn db_filters_has_activities() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_activity("a:b", 10, "abc").await.unwrap();
-        db.put_activity("a:c", 11, "abc").await.unwrap();
-        db.put_activity("a:d", 12, "abc").await.unwrap();
-        db.put_activity("a:e", 13, "abc").await.unwrap();
+        db.put_activity("a:b", 10, "", "").await.unwrap();
+        db.put_activity("a:c", 11, "", "").await.unwrap();
+        db.put_activity("a:d", 12, "", "").await.unwrap();
+        db.put_activity("a:e", 13, "", "").await.unwrap();
         let has = db
             .filter_has_activities(&["a:b", "a:c", "a:d", "a:f"], 10)
             .await

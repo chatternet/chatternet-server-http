@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use ssi::vc::Credential;
@@ -40,37 +40,61 @@ async fn handle_sync_activities(
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PostActivitiesBody {
+pub struct PushActivitiesBody {
     activities: Vec<Credential>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PostActivitiesResponse {
+pub struct PushActivitiesResponse {
     accepted_activities_id: Vec<String>,
 }
 
-async fn handle_post_activity(mut activity: Credential, db: &Arc<Db>) -> Result<String> {
+async fn handle_push_activity(mut activity: Credential, db: &Arc<Db>) -> Result<String> {
     let id = verify_credential(&mut activity).await?;
-    let activity = serde_json::to_string(&activity.credential_subject.to_single())?;
+    let activity = activity;
+    let issuer_did = activity
+        .issuer
+        .as_ref()
+        .ok_or(anyhow!("activity has no issuer"))?
+        .get_id();
+    let activity = serde_json::to_string(&activity)?;
     let timestamp_millis = Utc::now().timestamp_millis();
-    db.put_activity(&id, timestamp_millis, &activity).await?;
+    db.put_activity(&id, timestamp_millis, &issuer_did, &activity)
+        .await?;
     Ok(id)
 }
 
-async fn handle_post_activities(
-    body: PostActivitiesBody,
+async fn handle_push_activities(
+    body: PushActivitiesBody,
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
     let mut accepted_activities_id = Vec::new();
     for activity in body.activities {
-        let id = handle_post_activity(activity, &db).await;
+        let id = handle_push_activity(activity, &db).await;
         if let Ok(id) = id {
             accepted_activities_id.push(id);
         }
     }
-    Ok(warp::reply::json(&PostActivitiesResponse {
+    Ok(warp::reply::json(&PushActivitiesResponse {
         accepted_activities_id,
     }))
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FetchIssuersActivitiesBody {
+    issuers_did: Vec<String>,
+    since_timestamp_millis: i64,
+}
+
+async fn handle_fetch_issuers_activities(
+    body: FetchIssuersActivitiesBody,
+    db: Arc<Db>,
+) -> Result<impl warp::Reply, Rejection> {
+    let activities = db
+        .get_issuers_activities(&body.issuers_did, body.since_timestamp_millis)
+        .await
+        .map_err(Error::Any)?;
+    Ok(warp::reply::json(&activities))
 }
 
 fn with_resource<T: Clone + Send>(
@@ -89,14 +113,20 @@ pub fn build_api(
         .and(warp::body::json())
         .and(with_resource(db.clone()))
         .and_then(handle_sync_activities);
-    let route_post_activities = warp::post()
-        .and(warp::path("post_activities"))
+    let route_push_activities = warp::post()
+        .and(warp::path("push_activities"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
-        .and_then(handle_post_activities);
+        .and_then(handle_push_activities);
+    let route_fetch_issuers_activities = warp::post()
+        .and(warp::path("fetch_issuers_activities"))
+        .and(warp::body::json())
+        .and(with_resource(db.clone()))
+        .and_then(handle_fetch_issuers_activities);
     route_version
         .or(route_sync_activities)
-        .or(route_post_activities)
+        .or(route_push_activities)
+        .or(route_fetch_issuers_activities)
 }
 
 #[cfg(test)]
@@ -110,7 +140,7 @@ mod test {
     use warp::{http::StatusCode, test::request};
 
     use crate::activitystreams::{
-        build_credential, build_jwk, cid_from_json, cid_to_urn, new_context_loader,
+        build_credential, build_jwk, cid_from_json, cid_to_urn, did_from_jwk, new_context_loader,
     };
 
     use super::*;
@@ -128,9 +158,9 @@ mod test {
     #[tokio::test]
     async fn api_handles_sync_activities() {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
-        db.put_activity("a:b", 10, "abc").await.unwrap();
-        db.put_activity("a:c", 11, "abc").await.unwrap();
-        db.put_activity("a:d", 11, "abc").await.unwrap();
+        db.put_activity("a:b", 10, "", "").await.unwrap();
+        db.put_activity("a:c", 11, "", "").await.unwrap();
+        db.put_activity("a:d", 11, "", "").await.unwrap();
         let api = build_api(db);
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request()
@@ -162,7 +192,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_handles_post_activities() {
+    async fn api_handles_push_activities() {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let api = build_api(db);
@@ -173,17 +203,67 @@ mod test {
             Some(URI::from_str("a:b").unwrap());
         let response = request()
             .method("POST")
-            .path("/post_activities")
-            .json(&PostActivitiesBody {
+            .path("/push_activities")
+            .json(&PushActivitiesBody {
                 activities: vec![note_invalid, note_1, note_2],
             })
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body: PostActivitiesResponse = serde_json::from_slice(response.body()).unwrap();
+        let body: PushActivitiesResponse = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
             HashSet::<String>::from_iter(body.accepted_activities_id),
             HashSet::<String>::from_iter([cid_1, cid_2]),
         );
+    }
+
+    #[tokio::test]
+    async fn api_handles_fetch_issuers_activities() {
+        let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let api = build_api(db);
+        let (note_1, _) = build_note(&jwk_1, "").await;
+        let since_timestamp_millis = note_1
+            .proof
+            .as_ref()
+            .unwrap()
+            .to_single()
+            .unwrap()
+            .created
+            .unwrap()
+            .timestamp_millis();
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        let (note_2, _) = build_note(&jwk_1, "").await;
+        let note_2_id = note_2.id.clone();
+        let (note_3, _) = build_note(&jwk_2, "").await;
+        let response = request()
+            .method("POST")
+            .path("/push_activities")
+            .json(&PushActivitiesBody {
+                activities: vec![note_1, note_2, note_3],
+            })
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let response = request()
+            .method("POST")
+            .path("/fetch_issuers_activities")
+            .json(&FetchIssuersActivitiesBody {
+                issuers_did: vec![did_from_jwk(&jwk_1).unwrap()],
+                since_timestamp_millis,
+            })
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let activities: Vec<Credential> = serde_json::from_slice::<Vec<String>>(response.body())
+            .unwrap()
+            .iter()
+            .map(AsRef::as_ref)
+            .map(serde_json::from_str::<Credential>)
+            .filter_map(|x| x.ok())
+            .collect();
+        assert_eq!(activities.len(), 1);
+        assert_eq!(activities.first().unwrap().id, note_2_id);
     }
 }
