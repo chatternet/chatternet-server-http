@@ -1,0 +1,32 @@
+use std::sync::Arc;
+
+use anyhow::Result;
+use clap::Parser;
+use tokio;
+use warp;
+
+use chatternet_server::db::Db;
+use chatternet_server::handlers::build_api;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    port: u16,
+    #[arg(short, long)]
+    loopback: bool,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    pretty_env_logger::init();
+    let args = Args::parse();
+    let db = Arc::new(Db::new("sqlite::memory:").await?);
+    let routes = build_api(db);
+    let address = if args.loopback {
+        [127, 0, 0, 1]
+    } else {
+        [0, 0, 0, 0]
+    };
+    warp::serve(routes).run((address, args.port)).await;
+    Ok(())
+}
