@@ -24,7 +24,8 @@ impl Db {
             CREATE TABLE IF NOT EXISTS `Activities` \
             (\
                 `id` TEXT PRIMARY KEY, \
-                `timestamp_millis` BIGINT NOT NULL\
+                `timestamp_millis` BIGINT NOT NULL, \
+                `activity` TEXT NOT NULL\
             );\
             ",
         )
@@ -42,17 +43,23 @@ impl Db {
         Ok(Db { pool })
     }
 
-    pub async fn put_activity(&self, id: &str, timestamp_millis: i64) -> Result<()> {
+    pub async fn put_activity(
+        &self,
+        id: &str,
+        timestamp_millis: i64,
+        activity: &str,
+    ) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
         sqlx::query(
             "\
             INSERT INTO `Activities` \
-            (`id`, `timestamp_millis`) \
-            VALUES($1, $2)\
+            (`id`, `timestamp_millis`, `activity`) \
+            VALUES($1, $2, $3)\
             ",
         )
         .bind(id)
         .bind(timestamp_millis)
+        .bind(activity)
         .execute(&mut conn)
         .await?;
         Ok(())
@@ -103,16 +110,16 @@ mod test {
     #[tokio::test]
     async fn db_puts_activity() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_activity("a:b", 10).await.unwrap();
+        db.put_activity("a:b", 10, "abc").await.unwrap();
     }
 
     #[tokio::test]
     async fn db_filters_has_activities() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_activity("a:b", 10).await.unwrap();
-        db.put_activity("a:c", 11).await.unwrap();
-        db.put_activity("a:d", 12).await.unwrap();
-        db.put_activity("a:e", 13).await.unwrap();
+        db.put_activity("a:b", 10, "abc").await.unwrap();
+        db.put_activity("a:c", 11, "abc").await.unwrap();
+        db.put_activity("a:d", 12, "abc").await.unwrap();
+        db.put_activity("a:e", 13, "abc").await.unwrap();
         let has = db
             .filter_has_activities(&["a:b", "a:c", "a:d", "a:f"], 10)
             .await

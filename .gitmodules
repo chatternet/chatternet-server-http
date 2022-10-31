@@ -1,0 +1,3 @@
+[submodule "lib/ssi"]
+	path = libs/ssi
+	url = https://github.com/spruceid/ssi.git

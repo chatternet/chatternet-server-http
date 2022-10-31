@@ -5,8 +5,8 @@ use clap::Parser;
 use tokio;
 use warp;
 
-use chatternet_server::db::Db;
-use chatternet_server::handlers::build_api;
+use chatternet_server_http::db::Db;
+use chatternet_server_http::handlers::build_api;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
