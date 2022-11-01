@@ -28,7 +28,7 @@ async fn handle_sync_activities(
     let has_activities = db
         .filter_has_activities(&body.have_activities_id, body.start_timestamp_micros)
         .await
-        .map_err(Error::Any)?;
+        .map_err(Error)?;
     let want_activities_id: Vec<String> = (&HashSet::<String>::from_iter(body.have_activities_id)
         - &HashSet::<String>::from_iter(has_activities))
         .iter()
@@ -98,7 +98,7 @@ async fn handle_fetch_issuers_activities(
             body.tags_id.as_ref().map(Vec::as_slice),
         )
         .await
-        .map_err(Error::Any)?;
+        .map_err(Error)?;
     Ok(warp::reply::json(&activities))
 }
 

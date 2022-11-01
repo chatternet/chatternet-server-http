@@ -2,9 +2,6 @@ use anyhow;
 use warp;
 
 #[derive(Debug)]
-pub enum Error {
-    Any(anyhow::Error),
-    Json(serde_json::Error),
-}
+pub struct Error(pub anyhow::Error);
 
 impl warp::reject::Reject for Error {}
