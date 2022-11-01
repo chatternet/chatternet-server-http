@@ -7,7 +7,7 @@ use std::sync::Arc;
 use warp::{Filter, Rejection};
 
 use crate::activitystreams::verify_credential;
-use crate::db::Db;
+use crate::db::{Db, NO_TAGS};
 use crate::errors::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,7 +59,7 @@ async fn handle_push_activity(mut activity: Credential, db: &Arc<Db>) -> Result<
         .get_id();
     let activity = serde_json::to_string(&activity)?;
     let timestamp_micros = Utc::now().timestamp_micros();
-    db.put_activity(&id, timestamp_micros, &issuer_did, &activity)
+    db.put_activity(&activity, &id, timestamp_micros, &issuer_did, NO_TAGS)
         .await?;
     Ok(id)
 }
@@ -158,9 +158,9 @@ mod test {
     #[tokio::test]
     async fn api_handles_sync_activities() {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
-        db.put_activity("a:b", 10, "", "").await.unwrap();
-        db.put_activity("a:c", 11, "", "").await.unwrap();
-        db.put_activity("a:d", 11, "", "").await.unwrap();
+        db.put_activity("", "a:b", 10, "", NO_TAGS).await.unwrap();
+        db.put_activity("", "a:c", 11, "", NO_TAGS).await.unwrap();
+        db.put_activity("", "a:d", 11, "", NO_TAGS).await.unwrap();
         let api = build_api(db);
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request()
