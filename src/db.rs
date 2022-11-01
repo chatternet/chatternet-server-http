@@ -138,23 +138,48 @@ impl Db {
 
     pub async fn get_issuers_activities(
         &self,
-        issuers_did: &[impl AsRef<str>],
+        issuers_did: &Vec<String>,
         start_timestamp_micros: i64,
+        tags_id: Option<&[impl AsRef<str>]>,
     ) -> Result<Vec<String>> {
         let mut conn = self.pool.acquire().await?;
-        let parameters = build_in_parameters(issuers_did.len(), Some(2));
-        let query_str = format!(
-            "\
-            SELECT `activity` FROM `Activities` \
-            WHERE `timestamp_micros` >= $1 AND `issuer_did` IN ({})
-            ORDER BY `timestamp_micros`;\
-            ",
-            parameters
-        );
+        let parameters_issuer = build_in_parameters(issuers_did.len(), Some(2));
+        let query_str = if let Some(tags_id) = tags_id {
+            let parameters_tag = build_in_parameters(tags_id.len(), Some(2 + issuers_did.len()));
+            format!(
+                "\
+                SELECT `activity` FROM `Activities` \
+                WHERE `timestamp_micros` >= $1 \
+                AND `issuer_did` IN ({}) \
+                AND `id` IN (\
+                    SELECT `activity_id` FROM `ActivitiesTags` \
+                    WHERE `timestamp_micros` >= $1 \
+                    AND `ActivitiesTags`.`tag_id` IN ({})\
+                ) \
+                ORDER BY `timestamp_micros`;\
+                ",
+                parameters_issuer, parameters_tag,
+            )
+        } else {
+            format!(
+                "\
+                SELECT `activity` FROM `Activities` \
+                WHERE `timestamp_micros` >= $1 \
+                AND `issuer_did` IN ({}) \
+                ORDER BY `timestamp_micros`;\
+                ",
+                parameters_issuer,
+            )
+        };
         let mut query = sqlx::query(&query_str);
         query = query.bind(start_timestamp_micros);
         for issuer_did in issuers_did {
-            query = query.bind(issuer_did.as_ref());
+            query = query.bind(issuer_did);
+        }
+        if let Some(tags_id) = tags_id {
+            for tag_id in tags_id {
+                query = query.bind(tag_id.as_ref());
+            }
         }
         let mut activities = Vec::new();
         let mut rows = query.fetch(&mut conn);
@@ -219,6 +244,7 @@ mod test {
     #[tokio::test]
     async fn db_gets_issuers_activities() {
         let db = Db::new("sqlite::memory:").await.unwrap();
+        // too early
         db.put_activity("a1", "a:b", 10, "did:key:a", NO_TAGS)
             .await
             .unwrap();
@@ -228,11 +254,48 @@ mod test {
         db.put_activity("a3", "a:d", 12, "did:key:b", NO_TAGS)
             .await
             .unwrap();
+        // doesn't have requested issuer
         db.put_activity("a4", "a:e", 13, "did:key:c", NO_TAGS)
             .await
             .unwrap();
         let activities = db
-            .get_issuers_activities(&["did:key:a", "did:key:b"], 11)
+            .get_issuers_activities(
+                &vec!["did:key:a".to_string(), "did:key:b".to_string()],
+                11,
+                NO_TAGS,
+            )
+            .await
+            .unwrap();
+        assert_eq!(activities, ["a2", "a3"]);
+    }
+
+    #[tokio::test]
+    async fn db_gets_issuers_activities_with_tags() {
+        let db = Db::new("sqlite::memory:").await.unwrap();
+        // too early
+        db.put_activity("a1", "a:b", 10, "did:key:a", Some(&["tag:a"]))
+            .await
+            .unwrap();
+        db.put_activity("a2", "a:c", 11, "did:key:a", Some(&["tag:a"]))
+            .await
+            .unwrap();
+        db.put_activity("a3", "a:d", 12, "did:key:b", Some(&["tag:b", "tag:c"]))
+            .await
+            .unwrap();
+        // doesn't have requested tags
+        db.put_activity("a4", "a:e", 12, "did:key:b", Some(&["tag:c"]))
+            .await
+            .unwrap();
+        // doesn't have requested issuer
+        db.put_activity("a5", "a:f", 13, "did:key:c", Some(&["tag:a"]))
+            .await
+            .unwrap();
+        let activities = db
+            .get_issuers_activities(
+                &vec!["did:key:a".to_string(), "did:key:b".to_string()],
+                11,
+                Some(&["tag:a", "tag:b"]),
+            )
             .await
             .unwrap();
         assert_eq!(activities, ["a2", "a3"]);

@@ -84,6 +84,7 @@ async fn handle_push_activities(
 pub struct FetchIssuersActivitiesBody {
     issuers_did: Vec<String>,
     start_timestamp_micros: i64,
+    tags_id: Option<Vec<String>>,
 }
 
 async fn handle_fetch_issuers_activities(
@@ -91,7 +92,11 @@ async fn handle_fetch_issuers_activities(
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
     let activities = db
-        .get_issuers_activities(&body.issuers_did, body.start_timestamp_micros)
+        .get_issuers_activities(
+            &body.issuers_did,
+            body.start_timestamp_micros,
+            body.tags_id.as_ref().map(Vec::as_slice),
+        )
         .await
         .map_err(Error::Any)?;
     Ok(warp::reply::json(&activities))
@@ -252,6 +257,7 @@ mod test {
             .json(&FetchIssuersActivitiesBody {
                 issuers_did: vec![did_from_jwk(&jwk_1).unwrap()],
                 start_timestamp_micros,
+                tags_id: None,
             })
             .reply(&api)
             .await;
