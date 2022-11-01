@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use warp::{Filter, Rejection};
 
-use crate::activitystreams::verify_credential;
+use crate::chatternet::activitystreams::verify_credential;
 use crate::db::{Db, NO_TAGS};
 use crate::errors::Error;
 
@@ -144,9 +144,10 @@ mod test {
     use tokio;
     use warp::{http::StatusCode, test::request};
 
-    use crate::activitystreams::{
-        build_credential, build_jwk, cid_from_json, cid_to_urn, did_from_jwk, new_context_loader,
+    use crate::chatternet::activitystreams::{
+        build_credential, cid_from_json, cid_to_urn, new_context_loader,
     };
+    use crate::chatternet::didkey::{build_jwk, did_from_jwk};
 
     use super::*;
 

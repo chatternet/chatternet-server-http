@@ -1,5 +1,4 @@
-pub mod activitystreams;
-pub mod contexts;
+pub mod chatternet;
 pub mod db;
 pub mod errors;
 pub mod handlers;

@@ -6,41 +6,20 @@ use anyhow::{anyhow, Result};
 use cid::multihash::{Code, MultihashDigest};
 use cid::Cid;
 use did_method_key::DIDKey;
-use ed25519_dalek::{Keypair, PublicKey, SecretKey, SECRET_KEY_LENGTH};
-use rand::{CryptoRng, RngCore};
 use serde::Serialize;
 use serde_json;
-use ssi::did::{DIDMethod, Source};
 use ssi::jsonld::{json_to_dataset, ContextLoader};
-use ssi::jwk::{Base64urlUInt, OctetParams, Params, JWK};
+use ssi::jwk::JWK;
 use ssi::urdna2015;
 use ssi::vc::{Credential, LinkedDataProofOptions};
 
-use crate::contexts;
+use super::contexts;
+use super::didkey;
 
 const CONTEXTS: [&str; 2] = [
     "https://www.w3.org/2018/credentials/v1",
     contexts::ACTIVITY_STREAMS_URI,
 ];
-
-pub fn build_jwk(rng: &mut (impl CryptoRng + RngCore)) -> Result<JWK> {
-    let mut secret_key_bytes = [0u8; SECRET_KEY_LENGTH];
-    rng.fill_bytes(&mut secret_key_bytes);
-    let secret = SecretKey::from_bytes(&secret_key_bytes).unwrap();
-    let public: PublicKey = (&secret).into();
-    let keypair = Keypair { secret, public };
-    Ok(JWK::from(Params::OKP(OctetParams {
-        curve: "Ed25519".to_string(),
-        public_key: Base64urlUInt(keypair.public.as_ref().to_vec()),
-        private_key: Some(Base64urlUInt(keypair.secret.as_ref().to_vec())),
-    })))
-}
-
-pub fn did_from_jwk(jwk: &JWK) -> Result<String> {
-    DIDKey
-        .generate(&Source::Key(&jwk))
-        .ok_or(anyhow!("key pair cannot be represented as a DID"))
-}
 
 pub fn new_context_loader() -> ContextLoader {
     ContextLoader::empty()
@@ -83,7 +62,7 @@ pub async fn build_credential<Kind>(
     let id = cid_to_urn(cid_from_json(&subject, &mut new_context_loader()).await?);
     subject.set_id(id.parse::<IriString>().unwrap());
 
-    let did = did_from_jwk(&jwk)?;
+    let did = didkey::did_from_jwk(&jwk)?;
 
     // the credential document wrapping the subject document
     let mut credential: Credential = serde_json::from_value(serde_json::json!({
@@ -146,18 +125,6 @@ mod test {
 
     use super::*;
 
-    #[test]
-    fn builds_jwk() {
-        build_jwk(&mut rand::thread_rng()).unwrap();
-    }
-
-    #[test]
-    fn builds_did_from_jwk() {
-        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = did_from_jwk(&jwk).unwrap();
-        assert!(did.starts_with("did:key:"));
-    }
-
     #[tokio::test]
     async fn builds_cid_from_object() {
         let mut note = Note::new();
@@ -176,7 +143,7 @@ mod test {
 
     #[tokio::test]
     async fn builds_credential_and_verifies() {
-        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let mut note = Note::new();
         note.set_content("abc");
         let cid = cid_to_urn(
@@ -195,7 +162,7 @@ mod test {
 
     #[tokio::test]
     async fn builds_credential_modified_doesnt_verify() {
-        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let mut note = Note::new();
         note.set_content("abc");
 
@@ -212,7 +179,7 @@ mod test {
     // #[tokio::test]
     #[allow(dead_code)]
     async fn builds_credential_aribrary_data_doesnt_verify() {
-        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let mut note = Note::new();
         note.set_content("abc");
 
