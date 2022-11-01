@@ -27,7 +27,7 @@ impl Db {
             CREATE TABLE IF NOT EXISTS `Activities` \
             (\
                 `id` TEXT PRIMARY KEY, \
-                `timestamp_millis` BIGINT NOT NULL, \
+                `timestamp_micros` BIGINT NOT NULL, \
                 `issuer_did` TEXT NOT NULL, \
                 `activity` TEXT NOT NULL\
             );\
@@ -37,8 +37,8 @@ impl Db {
         .await?;
         sqlx::query(
             "\
-            CREATE INDEX IF NOT EXISTS `timestamp_millis` \
-            ON `Activities`(`timestamp_millis`);\
+            CREATE INDEX IF NOT EXISTS `timestamp_micros` \
+            ON `Activities`(`timestamp_micros`);\
             ",
         )
         .execute(&mut conn)
@@ -57,7 +57,7 @@ impl Db {
     pub async fn put_activity(
         &self,
         id: &str,
-        timestamp_millis: i64,
+        timestamp_micros: i64,
         issuer_did: &str,
         activity: &str,
     ) -> Result<()> {
@@ -65,12 +65,12 @@ impl Db {
         sqlx::query(
             "\
             INSERT INTO `Activities` \
-            (`id`, `timestamp_millis`, `issuer_did`, `activity`) \
+            (`id`, `timestamp_micros`, `issuer_did`, `activity`) \
             VALUES($1, $2, $3, $4)\
             ",
         )
         .bind(id)
-        .bind(timestamp_millis)
+        .bind(timestamp_micros)
         .bind(issuer_did)
         .bind(activity)
         .execute(&mut conn)
@@ -81,20 +81,20 @@ impl Db {
     pub async fn get_issuers_activities(
         &self,
         issuers_did: &[impl AsRef<str>],
-        since_timestamp_millis: i64,
+        start_timestamp_micros: i64,
     ) -> Result<Vec<String>> {
         let mut conn = self.pool.acquire().await?;
         let parameters = build_in_parameters(issuers_did.len(), Some(2));
         let query_str = format!(
             "\
             SELECT `activity` FROM `Activities` \
-            WHERE `timestamp_millis` > $1 AND `issuer_did` IN ({})
-            ORDER BY `timestamp_millis`;\
+            WHERE `timestamp_micros` >= $1 AND `issuer_did` IN ({})
+            ORDER BY `timestamp_micros`;\
             ",
             parameters
         );
         let mut query = sqlx::query(&query_str);
-        query = query.bind(since_timestamp_millis);
+        query = query.bind(start_timestamp_micros);
         for issuer_did in issuers_did {
             query = query.bind(issuer_did.as_ref());
         }
@@ -110,19 +110,19 @@ impl Db {
     pub async fn filter_has_activities(
         &self,
         ids: &[impl AsRef<str>],
-        since_timestamp_millis: i64,
+        start_timestamp_micros: i64,
     ) -> Result<Vec<String>> {
         let mut conn = self.pool.acquire().await?;
         let parameters = build_in_parameters(ids.len(), Some(2));
         let query_str = format!(
             "\
             SELECT `id` FROM `Activities` \
-            WHERE `timestamp_millis` > $1 AND `id` IN ({});\
+            WHERE `timestamp_micros` >= $1 AND `id` IN ({});\
             ",
             parameters
         );
         let mut query = sqlx::query(&query_str);
-        query = query.bind(since_timestamp_millis);
+        query = query.bind(start_timestamp_micros);
         for id in ids {
             query = query.bind(id.as_ref());
         }
@@ -161,7 +161,7 @@ mod test {
         db.put_activity("a:d", 12, "did:key:b", "a3").await.unwrap();
         db.put_activity("a:e", 13, "did:key:c", "a4").await.unwrap();
         let activities = db
-            .get_issuers_activities(&["did:key:a", "did:key:b"], 10)
+            .get_issuers_activities(&["did:key:a", "did:key:b"], 11)
             .await
             .unwrap();
         assert_eq!(activities, ["a2", "a3"]);
@@ -175,7 +175,7 @@ mod test {
         db.put_activity("a:d", 12, "", "").await.unwrap();
         db.put_activity("a:e", 13, "", "").await.unwrap();
         let has = db
-            .filter_has_activities(&["a:b", "a:c", "a:d", "a:f"], 10)
+            .filter_has_activities(&["a:b", "a:c", "a:d", "a:f"], 11)
             .await
             .unwrap();
         assert_eq!(has, ["a:c", "a:d"]);

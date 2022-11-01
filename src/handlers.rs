@@ -13,7 +13,7 @@ use crate::errors::Error;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SyncActivitiesBody {
     have_activities_id: Vec<String>,
-    since_timestamp_millis: i64,
+    start_timestamp_micros: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ async fn handle_sync_activities(
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
     let has_activities = db
-        .filter_has_activities(&body.have_activities_id, body.since_timestamp_millis)
+        .filter_has_activities(&body.have_activities_id, body.start_timestamp_micros)
         .await
         .map_err(Error::Any)?;
     let want_activities_id: Vec<String> = (&HashSet::<String>::from_iter(body.have_activities_id)
@@ -58,8 +58,8 @@ async fn handle_push_activity(mut activity: Credential, db: &Arc<Db>) -> Result<
         .ok_or(anyhow!("activity has no issuer"))?
         .get_id();
     let activity = serde_json::to_string(&activity)?;
-    let timestamp_millis = Utc::now().timestamp_millis();
-    db.put_activity(&id, timestamp_millis, &issuer_did, &activity)
+    let timestamp_micros = Utc::now().timestamp_micros();
+    db.put_activity(&id, timestamp_micros, &issuer_did, &activity)
         .await?;
     Ok(id)
 }
@@ -83,7 +83,7 @@ async fn handle_push_activities(
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FetchIssuersActivitiesBody {
     issuers_did: Vec<String>,
-    since_timestamp_millis: i64,
+    start_timestamp_micros: i64,
 }
 
 async fn handle_fetch_issuers_activities(
@@ -91,7 +91,7 @@ async fn handle_fetch_issuers_activities(
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
     let activities = db
-        .get_issuers_activities(&body.issuers_did, body.since_timestamp_millis)
+        .get_issuers_activities(&body.issuers_did, body.start_timestamp_micros)
         .await
         .map_err(Error::Any)?;
     Ok(warp::reply::json(&activities))
@@ -168,7 +168,7 @@ mod test {
             .path("/sync_activities")
             .json(&SyncActivitiesBody {
                 have_activities_id: vec!["a:b".to_string(), "a:c".to_string(), "a:e".to_string()],
-                since_timestamp_millis: 10,
+                start_timestamp_micros: 11,
             })
             .reply(&api)
             .await;
@@ -224,7 +224,7 @@ mod test {
         let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
         let api = build_api(db);
         let (note_1, _) = build_note(&jwk_1, "").await;
-        let since_timestamp_millis = note_1
+        let start_timestamp_micros = 1 + note_1
             .proof
             .as_ref()
             .unwrap()
@@ -232,8 +232,8 @@ mod test {
             .unwrap()
             .created
             .unwrap()
-            .timestamp_millis();
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            .timestamp_micros();
+        tokio::time::sleep(tokio::time::Duration::from_micros(1)).await;
         let (note_2, _) = build_note(&jwk_1, "").await;
         let note_2_id = note_2.id.clone();
         let (note_3, _) = build_note(&jwk_2, "").await;
@@ -251,7 +251,7 @@ mod test {
             .path("/fetch_issuers_activities")
             .json(&FetchIssuersActivitiesBody {
                 issuers_did: vec![did_from_jwk(&jwk_1).unwrap()],
-                since_timestamp_millis,
+                start_timestamp_micros,
             })
             .reply(&api)
             .await;
