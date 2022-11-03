@@ -11,12 +11,14 @@ use crate::db::{Db, NO_TAGS};
 use crate::errors::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncActivitiesBody {
     have_activities_id: Vec<String>,
     start_timestamp_micros: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SyncActivitiesResponse {
     want_activities_id: Vec<String>,
 }
@@ -40,11 +42,13 @@ async fn handle_sync_activities(
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PushActivitiesBody {
     activities: Vec<Credential>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PushActivitiesResponse {
     accepted_activities_id: Vec<String>,
 }
@@ -81,6 +85,7 @@ async fn handle_push_activities(
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FetchIssuersActivitiesBody {
     issuers_did: Vec<String>,
     start_timestamp_micros: i64,
@@ -114,17 +119,17 @@ pub fn build_api(
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
     let route_sync_activities = warp::post()
-        .and(warp::path("sync_activities"))
+        .and(warp::path("syncActivities"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
         .and_then(handle_sync_activities);
     let route_push_activities = warp::post()
-        .and(warp::path("push_activities"))
+        .and(warp::path("pushActivities"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
         .and_then(handle_push_activities);
     let route_fetch_issuers_activities = warp::post()
-        .and(warp::path("fetch_issuers_activities"))
+        .and(warp::path("fetchIssuersActivities"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
         .and_then(handle_fetch_issuers_activities);
@@ -171,7 +176,7 @@ mod test {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request()
             .method("POST")
-            .path("/sync_activities")
+            .path("/syncActivities")
             .json(&SyncActivitiesBody {
                 have_activities_id: vec!["a:b".to_string(), "a:c".to_string(), "a:e".to_string()],
                 start_timestamp_micros: 11,
@@ -209,7 +214,7 @@ mod test {
             Some(URI::from_str("a:b").unwrap());
         let response = request()
             .method("POST")
-            .path("/push_activities")
+            .path("/pushActivities")
             .json(&PushActivitiesBody {
                 activities: vec![note_invalid, note_1, note_2],
             })
@@ -245,7 +250,7 @@ mod test {
         let (note_3, _) = build_note(&jwk_2, "").await;
         let response = request()
             .method("POST")
-            .path("/push_activities")
+            .path("/pushActivities")
             .json(&PushActivitiesBody {
                 activities: vec![note_1, note_2, note_3],
             })
@@ -254,7 +259,7 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let response = request()
             .method("POST")
-            .path("/fetch_issuers_activities")
+            .path("/fetchIssuersActivities")
             .json(&FetchIssuersActivitiesBody {
                 issuers_did: vec![did_from_jwk(&jwk_1).unwrap()],
                 start_timestamp_micros,
