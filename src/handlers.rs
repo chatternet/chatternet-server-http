@@ -6,105 +6,105 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use warp::{Filter, Rejection};
 
-use crate::chatternet::activitystreams::verify_credential;
+use crate::chatternet::activities::verify_message;
 use crate::db::{Db, NO_TAGS};
 use crate::errors::Error;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncActivitiesBody {
-    have_activities_id: Vec<String>,
+pub struct SyncMessagesBody {
+    have_messages_id: Vec<String>,
     start_timestamp_micros: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncActivitiesResponse {
-    want_activities_id: Vec<String>,
+pub struct SyncMessagesResponse {
+    want_messages_id: Vec<String>,
 }
 
-async fn handle_sync_activities(
-    body: SyncActivitiesBody,
+async fn handle_sync_messages(
+    body: SyncMessagesBody,
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let has_activities = db
-        .filter_has_activities(&body.have_activities_id, body.start_timestamp_micros)
+    let has_messages = db
+        .filter_has_messages(&body.have_messages_id, body.start_timestamp_micros)
         .await
         .map_err(Error)?;
-    let want_activities_id: Vec<String> = (&HashSet::<String>::from_iter(body.have_activities_id)
-        - &HashSet::<String>::from_iter(has_activities))
+    let want_messages_id: Vec<String> = (&HashSet::<String>::from_iter(body.have_messages_id)
+        - &HashSet::<String>::from_iter(has_messages))
         .iter()
         .cloned()
         .collect();
-    Ok(warp::reply::json(&SyncActivitiesResponse {
-        want_activities_id,
+    Ok(warp::reply::json(&SyncMessagesResponse {
+        want_messages_id,
     }))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PushActivitiesBody {
-    activities: Vec<Credential>,
+pub struct PushMessagesBody {
+    messages: Vec<Credential>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PushActivitiesResponse {
-    accepted_activities_id: Vec<String>,
+pub struct PushMessagesResponse {
+    accepted_messages_id: Vec<String>,
 }
 
-async fn handle_push_activity(mut activity: Credential, db: &Arc<Db>) -> Result<String> {
-    let id = verify_credential(&mut activity).await?;
-    let activity = activity;
-    let issuer_did = activity
+async fn handle_push_message(mut message: Credential, db: &Arc<Db>) -> Result<String> {
+    let id = verify_message(&mut message).await?;
+    let message = message;
+    let issuer_did = message
         .issuer
         .as_ref()
-        .ok_or(anyhow!("activity has no issuer"))?
+        .ok_or(anyhow!("message has no issuer"))?
         .get_id();
-    let activity = serde_json::to_string(&activity)?;
+    let message = serde_json::to_string(&message)?;
     let timestamp_micros = Utc::now().timestamp_micros();
-    db.put_activity(&activity, &id, timestamp_micros, &issuer_did, NO_TAGS)
+    db.put_message(&message, &id, timestamp_micros, &issuer_did, NO_TAGS)
         .await?;
     Ok(id)
 }
 
-async fn handle_push_activities(
-    body: PushActivitiesBody,
+async fn handle_push_messages(
+    body: PushMessagesBody,
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let mut accepted_activities_id = Vec::new();
-    for activity in body.activities {
-        let id = handle_push_activity(activity, &db).await;
+    let mut accepted_messages_id = Vec::new();
+    for message in body.messages {
+        let id = handle_push_message(message, &db).await;
         if let Ok(id) = id {
-            accepted_activities_id.push(id);
+            accepted_messages_id.push(id);
         }
     }
-    Ok(warp::reply::json(&PushActivitiesResponse {
-        accepted_activities_id,
+    Ok(warp::reply::json(&PushMessagesResponse {
+        accepted_messages_id,
     }))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FetchIssuersActivitiesBody {
+pub struct FetchIssuersMessagesBody {
     issuers_did: Vec<String>,
     start_timestamp_micros: i64,
     tags_id: Option<Vec<String>>,
 }
 
-async fn handle_fetch_issuers_activities(
-    body: FetchIssuersActivitiesBody,
+async fn handle_fetch_issuers_messages(
+    body: FetchIssuersMessagesBody,
     db: Arc<Db>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let activities = db
-        .get_issuers_activities(
+    let messages = db
+        .get_issuers_messages(
             &body.issuers_did,
             body.start_timestamp_micros,
             body.tags_id.as_ref().map(Vec::as_slice),
         )
         .await
         .map_err(Error)?;
-    Ok(warp::reply::json(&activities))
+    Ok(warp::reply::json(&messages))
 }
 
 fn with_resource<T: Clone + Send>(
@@ -118,25 +118,25 @@ pub fn build_api(
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
-    let route_sync_activities = warp::post()
-        .and(warp::path("syncActivities"))
+    let route_sync_messages = warp::post()
+        .and(warp::path("syncMessages"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
-        .and_then(handle_sync_activities);
-    let route_push_activities = warp::post()
-        .and(warp::path("pushActivities"))
+        .and_then(handle_sync_messages);
+    let route_push_messages = warp::post()
+        .and(warp::path("pushMessages"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
-        .and_then(handle_push_activities);
-    let route_fetch_issuers_activities = warp::post()
-        .and(warp::path("fetchIssuersActivities"))
+        .and_then(handle_push_messages);
+    let route_fetch_issuers_messages = warp::post()
+        .and(warp::path("fetchIssuersMessages"))
         .and(warp::body::json())
         .and(with_resource(db.clone()))
-        .and_then(handle_fetch_issuers_activities);
+        .and_then(handle_fetch_issuers_messages);
     route_version
-        .or(route_sync_activities)
-        .or(route_push_activities)
-        .or(route_fetch_issuers_activities)
+        .or(route_sync_messages)
+        .or(route_push_messages)
+        .or(route_fetch_issuers_messages)
 }
 
 #[cfg(test)]
@@ -149,8 +149,8 @@ mod test {
     use tokio;
     use warp::{http::StatusCode, test::request};
 
-    use crate::chatternet::activitystreams::{
-        build_credential, cid_from_json, cid_to_urn, new_context_loader,
+    use crate::chatternet::activities::{
+        build_message, cid_from_json, cid_to_urn, new_context_loader,
     };
     use crate::chatternet::didkey::{build_jwk, did_from_jwk};
 
@@ -167,26 +167,26 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_handles_sync_activities() {
+    async fn api_handles_sync_messages() {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
-        db.put_activity("", "a:b", 10, "", NO_TAGS).await.unwrap();
-        db.put_activity("", "a:c", 11, "", NO_TAGS).await.unwrap();
-        db.put_activity("", "a:d", 11, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:b", 10, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:c", 11, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:d", 11, "", NO_TAGS).await.unwrap();
         let api = build_api(db);
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request()
             .method("POST")
-            .path("/syncActivities")
-            .json(&SyncActivitiesBody {
-                have_activities_id: vec!["a:b".to_string(), "a:c".to_string(), "a:e".to_string()],
+            .path("/syncMessages")
+            .json(&SyncMessagesBody {
+                have_messages_id: vec!["a:b".to_string(), "a:c".to_string(), "a:e".to_string()],
                 start_timestamp_micros: 11,
             })
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body: SyncActivitiesResponse = serde_json::from_slice(response.body()).unwrap();
+        let body: SyncMessagesResponse = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
-            HashSet::<String>::from_iter(body.want_activities_id),
+            HashSet::<String>::from_iter(body.want_messages_id),
             HashSet::<String>::from_iter(["a:b".to_string(), "a:e".to_string()])
         );
     }
@@ -199,11 +199,11 @@ mod test {
                 .await
                 .unwrap(),
         );
-        (build_credential(note, &jwk).await.unwrap(), cid)
+        (build_message(note, &jwk).await.unwrap(), cid)
     }
 
     #[tokio::test]
-    async fn api_handles_push_activities() {
+    async fn api_handles_push_messages() {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let api = build_api(db);
@@ -214,22 +214,22 @@ mod test {
             Some(URI::from_str("a:b").unwrap());
         let response = request()
             .method("POST")
-            .path("/pushActivities")
-            .json(&PushActivitiesBody {
-                activities: vec![note_invalid, note_1, note_2],
+            .path("/pushMessages")
+            .json(&PushMessagesBody {
+                messages: vec![note_invalid, note_1, note_2],
             })
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let body: PushActivitiesResponse = serde_json::from_slice(response.body()).unwrap();
+        let body: PushMessagesResponse = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
-            HashSet::<String>::from_iter(body.accepted_activities_id),
+            HashSet::<String>::from_iter(body.accepted_messages_id),
             HashSet::<String>::from_iter([cid_1, cid_2]),
         );
     }
 
     #[tokio::test]
-    async fn api_handles_fetch_issuers_activities() {
+    async fn api_handles_fetch_issuers_messages() {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
         let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
         let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
@@ -250,17 +250,17 @@ mod test {
         let (note_3, _) = build_note(&jwk_2, "").await;
         let response = request()
             .method("POST")
-            .path("/pushActivities")
-            .json(&PushActivitiesBody {
-                activities: vec![note_1, note_2, note_3],
+            .path("/pushMessages")
+            .json(&PushMessagesBody {
+                messages: vec![note_1, note_2, note_3],
             })
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
         let response = request()
             .method("POST")
-            .path("/fetchIssuersActivities")
-            .json(&FetchIssuersActivitiesBody {
+            .path("/fetchIssuersMessages")
+            .json(&FetchIssuersMessagesBody {
                 issuers_did: vec![did_from_jwk(&jwk_1).unwrap()],
                 start_timestamp_micros,
                 tags_id: None,
@@ -268,14 +268,14 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let activities: Vec<Credential> = serde_json::from_slice::<Vec<String>>(response.body())
+        let messages: Vec<Credential> = serde_json::from_slice::<Vec<String>>(response.body())
             .unwrap()
             .iter()
             .map(AsRef::as_ref)
             .map(serde_json::from_str::<Credential>)
             .filter_map(|x| x.ok())
             .collect();
-        assert_eq!(activities.len(), 1);
-        assert_eq!(activities.first().unwrap().id, note_2_id);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages.first().unwrap().id, note_2_id);
     }
 }

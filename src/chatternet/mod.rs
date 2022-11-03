@@ -1,3 +1,3 @@
-pub mod activitystreams;
-pub mod contexts;
+pub mod activities;
 pub mod didkey;
+pub mod ldcontexts;

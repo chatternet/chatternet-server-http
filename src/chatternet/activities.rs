@@ -13,20 +13,20 @@ use ssi::jwk::JWK;
 use ssi::urdna2015;
 use ssi::vc::{Credential, LinkedDataProofOptions};
 
-use super::contexts;
 use super::didkey;
+use super::ldcontexts;
 
 const CONTEXTS: [&str; 2] = [
     "https://www.w3.org/2018/credentials/v1",
-    contexts::ACTIVITY_STREAMS_URI,
+    ldcontexts::ACTIVITY_STREAMS_URI,
 ];
 
 pub fn new_context_loader() -> ContextLoader {
     ContextLoader::empty()
         .with_static_loader()
         .with_context_map_from(HashMap::from([(
-            contexts::ACTIVITY_STREAMS_URI.to_owned(),
-            contexts::ACTIVITY_STREAMS.to_owned(),
+            ldcontexts::ACTIVITY_STREAMS_URI.to_owned(),
+            ldcontexts::ACTIVITY_STREAMS.to_owned(),
         )]))
         .unwrap()
 }
@@ -50,10 +50,10 @@ pub fn cid_to_urn(cid: Cid) -> String {
     format!("urn:cid:{}", cid.to_string())
 }
 
-/// Build a Chatter Net Credential
+/// Build a Chatter Net message.
 ///
 /// This is a Verifiable Credential whose subject is an Activity Stream Object.
-pub async fn build_credential<Kind>(
+pub async fn build_message<Kind>(
     mut subject: impl ObjectExt<Kind> + BaseExt<Kind> + Serialize,
     jwk: &JWK,
 ) -> Result<Credential> {
@@ -65,7 +65,7 @@ pub async fn build_credential<Kind>(
     let did = didkey::did_from_jwk(&jwk)?;
 
     // the credential document wrapping the subject document
-    let mut credential: Credential = serde_json::from_value(serde_json::json!({
+    let mut message: Credential = serde_json::from_value(serde_json::json!({
         "@context": CONTEXTS,
         "type": "VerifiableCredential",
         "issuer": did,
@@ -74,8 +74,8 @@ pub async fn build_credential<Kind>(
     }))?;
 
     // add the proof once the subject is known
-    credential.add_proof(
-        credential
+    message.add_proof(
+        message
             .generate_proof(
                 &jwk,
                 &LinkedDataProofOptions::default(),
@@ -85,11 +85,11 @@ pub async fn build_credential<Kind>(
             .await?,
     );
 
-    Ok(credential)
+    Ok(message)
 }
 
-pub async fn verify_credential(credential: &mut Credential) -> Result<String> {
-    if let Some(error) = credential
+pub async fn verify_message(message: &mut Credential) -> Result<String> {
+    if let Some(error) = message
         .verify(None, &DIDKey, &mut new_context_loader())
         .await
         .errors
@@ -98,20 +98,20 @@ pub async fn verify_credential(credential: &mut Credential) -> Result<String> {
     {
         return Err(anyhow!(error));
     }
-    let subject = credential
+    let subject = message
         .credential_subject
         .to_single_mut()
-        .ok_or(anyhow!("credential does not contain a single subject"))?;
+        .ok_or(anyhow!("message does not contain a single subject"))?;
     let id = subject
         .id
         .take()
-        .ok_or(anyhow!("credential subject does not have an ID"))?;
+        .ok_or(anyhow!("message subject does not have an ID"))?;
     let id_data = cid_to_urn(cid_from_json(subject, &mut new_context_loader()).await?);
     // TODO: compare CIDs (could be different encoding)
     if id_data != id.as_str() {
-        return Err(anyhow!("credential subject ID does not match its contents"));
+        return Err(anyhow!("message subject ID does not match its contents"));
     }
-    // return the credential to its original state
+    // return the message to its original state
     subject.id = Some(id);
     Ok(id_data)
 }
@@ -142,7 +142,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn builds_credential_and_verifies() {
+    async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let mut note = Note::new();
         note.set_content("abc");
@@ -151,24 +151,24 @@ mod test {
                 .await
                 .unwrap(),
         );
-        let mut credential = build_credential(note, &jwk).await.unwrap();
-        let credential_before = serde_json::to_string(&credential).unwrap();
-        let cid_verified = verify_credential(&mut credential).await.unwrap();
+        let mut message = build_message(note, &jwk).await.unwrap();
+        let message_before = serde_json::to_string(&message).unwrap();
+        let cid_verified = verify_message(&mut message).await.unwrap();
         assert_eq!(cid, cid_verified);
-        let credential_after = serde_json::to_string(&credential).unwrap();
-        // ensure the mutable borrow didn't change the credential
-        assert_eq!(credential_before, credential_after);
+        let message_after = serde_json::to_string(&message).unwrap();
+        // ensure the mutable borrow didn't change the message
+        assert_eq!(message_before, message_after);
     }
 
     #[tokio::test]
-    async fn builds_credential_modified_doesnt_verify() {
+    async fn builds_message_modified_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let mut note = Note::new();
         note.set_content("abc");
 
-        let mut credential = build_credential(note.clone(), &jwk).await.unwrap();
-        credential.id = Some(ssi::vc::URI::try_from("a:b".to_string()).unwrap());
-        verify_credential(&mut credential).await.unwrap_err();
+        let mut message = build_message(note.clone(), &jwk).await.unwrap();
+        message.id = Some(ssi::vc::URI::try_from("a:b".to_string()).unwrap());
+        verify_message(&mut message).await.unwrap_err();
     }
 
     // TODO: something isn't quite right yet
@@ -178,13 +178,13 @@ mod test {
     // https://releases.rs/docs/unreleased/1.65.0/
     // #[tokio::test]
     #[allow(dead_code)]
-    async fn builds_credential_aribrary_data_doesnt_verify() {
+    async fn builds_message_aribrary_data_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let mut note = Note::new();
         note.set_content("abc");
 
-        let mut credential = build_credential(note.clone(), &jwk).await.unwrap();
-        credential
+        let mut message = build_message(note.clone(), &jwk).await.unwrap();
+        message
             .credential_subject
             .to_single_mut()
             .unwrap()
@@ -195,6 +195,6 @@ mod test {
                 "new key".to_string(),
                 serde_json::to_value("new value").unwrap(),
             );
-        verify_credential(&mut credential).await.unwrap_err();
+        verify_message(&mut message).await.unwrap_err();
     }
 }

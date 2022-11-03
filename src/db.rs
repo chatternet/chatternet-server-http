@@ -27,10 +27,10 @@ impl Db {
 
         sqlx::query(
             "\
-            CREATE TABLE IF NOT EXISTS `Activities` \
+            CREATE TABLE IF NOT EXISTS `Messages` \
             (\
-                `activity` TEXT NOT NULL, \
-                `id` TEXT PRIMARY KEY, \
+                `message` TEXT NOT NULL, \
+                `message_id` TEXT PRIMARY KEY, \
                 `timestamp_micros` BIGINT NOT NULL, \
                 `issuer_did` TEXT NOT NULL\
             );\
@@ -41,7 +41,7 @@ impl Db {
         sqlx::query(
             "\
             CREATE INDEX IF NOT EXISTS `timestamp_micros` \
-            ON `Activities`(`timestamp_micros`);\
+            ON `Messages`(`timestamp_micros`);\
             ",
         )
         .execute(&mut conn)
@@ -49,7 +49,7 @@ impl Db {
         sqlx::query(
             "\
             CREATE INDEX IF NOT EXISTS `issuer_did` \
-            ON `Activities`(`issuer_did`);\
+            ON `Messages`(`issuer_did`);\
             ",
         )
         .execute(&mut conn)
@@ -57,9 +57,9 @@ impl Db {
 
         sqlx::query(
             "\
-            CREATE TABLE IF NOT EXISTS `ActivitiesTags` \
+            CREATE TABLE IF NOT EXISTS `MessagesTags` \
             (\
-                `activity_id` TEXT NOT NULL, \
+                `message_id` TEXT NOT NULL, \
                 `tag_id` TEXT NOT NULL, \
                 `timestamp_micros` BIGINT NOT NULL\
             );\
@@ -69,8 +69,8 @@ impl Db {
         .await?;
         sqlx::query(
             "\
-            CREATE INDEX IF NOT EXISTS `activity_id` \
-            ON `ActivitiesTags`(`activity_id`);\
+            CREATE INDEX IF NOT EXISTS `message_id` \
+            ON `MessagesTags`(`message_id`);\
             ",
         )
         .execute(&mut conn)
@@ -78,7 +78,7 @@ impl Db {
         sqlx::query(
             "\
             CREATE INDEX IF NOT EXISTS `tag_id` \
-            ON `ActivitiesTags`(`tag_id`);\
+            ON `MessagesTags`(`tag_id`);\
             ",
         )
         .execute(&mut conn)
@@ -86,7 +86,7 @@ impl Db {
         sqlx::query(
             "\
             CREATE INDEX IF NOT EXISTS `timestamp_micros` \
-            ON `Activities`(`timestamp_micros`);\
+            ON `MessagesTags`(`timestamp_micros`);\
             ",
         )
         .execute(&mut conn)
@@ -95,10 +95,10 @@ impl Db {
         Ok(Db { pool })
     }
 
-    pub async fn put_activity(
+    pub async fn put_message(
         &self,
-        activity: &str,
-        id: &str,
+        message: &str,
+        message_id: &str,
         timestamp_micros: i64,
         issuer_did: &str,
         tags_id: Option<&[impl AsRef<str>]>,
@@ -106,13 +106,13 @@ impl Db {
         let mut conn = self.pool.acquire().await?;
         sqlx::query(
             "\
-            INSERT INTO `Activities` \
-            (`activity`, `id`, `timestamp_micros`, `issuer_did`) \
+            INSERT INTO `Messages` \
+            (`message`, `message_id`, `timestamp_micros`, `issuer_did`) \
             VALUES($1, $2, $3, $4)\
             ",
         )
-        .bind(activity)
-        .bind(id)
+        .bind(message)
+        .bind(message_id)
         .bind(timestamp_micros)
         .bind(issuer_did)
         .execute(&mut conn)
@@ -121,12 +121,12 @@ impl Db {
             for tag_id in tags_id {
                 sqlx::query(
                     "\
-                    INSERT INTO `ActivitiesTags` \
-                    (`activity_id`, `tag_id`, `timestamp_micros`) \
+                    INSERT INTO `MessagesTags` \
+                    (`message_id`, `tag_id`, `timestamp_micros`) \
                     VALUES($1, $2, $3);\
                     ",
                 )
-                .bind(id)
+                .bind(message_id)
                 .bind(tag_id.as_ref())
                 .bind(timestamp_micros)
                 .execute(&mut conn)
@@ -136,7 +136,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn get_issuers_activities(
+    pub async fn get_issuers_messages(
         &self,
         issuers_did: &Vec<String>,
         start_timestamp_micros: i64,
@@ -148,13 +148,13 @@ impl Db {
             let parameters_tag = build_in_parameters(tags_id.len(), Some(2 + issuers_did.len()));
             format!(
                 "\
-                SELECT `activity` FROM `Activities` \
+                SELECT `message` FROM `Messages` \
                 WHERE `timestamp_micros` >= $1 \
                 AND `issuer_did` IN ({}) \
-                AND `id` IN (\
-                    SELECT `activity_id` FROM `ActivitiesTags` \
+                AND `message_id` IN (\
+                    SELECT `message_id` FROM `MessagesTags` \
                     WHERE `timestamp_micros` >= $1 \
-                    AND `ActivitiesTags`.`tag_id` IN ({})\
+                    AND `MessagesTags`.`tag_id` IN ({})\
                 ) \
                 ORDER BY `timestamp_micros`;\
                 ",
@@ -163,7 +163,7 @@ impl Db {
         } else {
             format!(
                 "\
-                SELECT `activity` FROM `Activities` \
+                SELECT `message` FROM `Messages` \
                 WHERE `timestamp_micros` >= $1 \
                 AND `issuer_did` IN ({}) \
                 ORDER BY `timestamp_micros`;\
@@ -181,16 +181,16 @@ impl Db {
                 query = query.bind(tag_id.as_ref());
             }
         }
-        let mut activities = Vec::new();
+        let mut messages = Vec::new();
         let mut rows = query.fetch(&mut conn);
         while let Some(row) = rows.try_next().await? {
-            let activity: &str = row.try_get("activity")?;
-            activities.push(activity.to_string());
+            let message: &str = row.try_get("message")?;
+            messages.push(message.to_string());
         }
-        Ok(activities)
+        Ok(messages)
     }
 
-    pub async fn filter_has_activities(
+    pub async fn filter_has_messages(
         &self,
         ids: &[impl AsRef<str>],
         start_timestamp_micros: i64,
@@ -199,21 +199,21 @@ impl Db {
         let parameters = build_in_parameters(ids.len(), Some(2));
         let query_str = format!(
             "\
-            SELECT `id` FROM `Activities` \
-            WHERE `timestamp_micros` >= $1 AND `id` IN ({});\
+            SELECT `message_id` FROM `Messages` \
+            WHERE `timestamp_micros` >= $1 AND `message_id` IN ({});\
             ",
             parameters
         );
         let mut query = sqlx::query(&query_str);
         query = query.bind(start_timestamp_micros);
-        for id in ids {
-            query = query.bind(id.as_ref());
+        for message_id in ids {
+            query = query.bind(message_id.as_ref());
         }
         let mut filtered_ids = Vec::new();
         let mut rows = query.fetch(&mut conn);
         while let Some(row) = rows.try_next().await? {
-            let id: &str = row.try_get("id")?;
-            filtered_ids.push(id.to_string());
+            let message_id: &str = row.try_get("message_id")?;
+            filtered_ids.push(message_id.to_string());
         }
         Ok(filtered_ids)
     }
@@ -231,85 +231,85 @@ mod test {
     }
 
     #[tokio::test]
-    async fn db_puts_activity() {
+    async fn db_puts_message() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_activity("abc", "a:b", 10, "did:a", NO_TAGS)
+        db.put_message("abc", "a:b", 10, "did:a", NO_TAGS)
             .await
             .unwrap();
-        db.put_activity("abc", "a:c", 10, "did:a", Some(&["tag:a"]))
+        db.put_message("abc", "a:c", 10, "did:a", Some(&["tag:a"]))
             .await
             .unwrap();
     }
 
     #[tokio::test]
-    async fn db_gets_issuers_activities() {
+    async fn db_gets_issuers_messages() {
         let db = Db::new("sqlite::memory:").await.unwrap();
         // too early
-        db.put_activity("a1", "a:b", 10, "did:key:a", NO_TAGS)
+        db.put_message("a1", "a:b", 10, "did:key:a", NO_TAGS)
             .await
             .unwrap();
-        db.put_activity("a2", "a:c", 11, "did:key:a", NO_TAGS)
+        db.put_message("a2", "a:c", 11, "did:key:a", NO_TAGS)
             .await
             .unwrap();
-        db.put_activity("a3", "a:d", 12, "did:key:b", NO_TAGS)
+        db.put_message("a3", "a:d", 12, "did:key:b", NO_TAGS)
             .await
             .unwrap();
         // doesn't have requested issuer
-        db.put_activity("a4", "a:e", 13, "did:key:c", NO_TAGS)
+        db.put_message("a4", "a:e", 13, "did:key:c", NO_TAGS)
             .await
             .unwrap();
-        let activities = db
-            .get_issuers_activities(
+        let messages = db
+            .get_issuers_messages(
                 &vec!["did:key:a".to_string(), "did:key:b".to_string()],
                 11,
                 NO_TAGS,
             )
             .await
             .unwrap();
-        assert_eq!(activities, ["a2", "a3"]);
+        assert_eq!(messages, ["a2", "a3"]);
     }
 
     #[tokio::test]
-    async fn db_gets_issuers_activities_with_tags() {
+    async fn db_gets_issuers_messages_with_tags() {
         let db = Db::new("sqlite::memory:").await.unwrap();
         // too early
-        db.put_activity("a1", "a:b", 10, "did:key:a", Some(&["tag:a"]))
+        db.put_message("a1", "a:b", 10, "did:key:a", Some(&["tag:a"]))
             .await
             .unwrap();
-        db.put_activity("a2", "a:c", 11, "did:key:a", Some(&["tag:a"]))
+        db.put_message("a2", "a:c", 11, "did:key:a", Some(&["tag:a"]))
             .await
             .unwrap();
-        db.put_activity("a3", "a:d", 12, "did:key:b", Some(&["tag:b", "tag:c"]))
+        db.put_message("a3", "a:d", 12, "did:key:b", Some(&["tag:b", "tag:c"]))
             .await
             .unwrap();
         // doesn't have requested tags
-        db.put_activity("a4", "a:e", 12, "did:key:b", Some(&["tag:c"]))
+        db.put_message("a4", "a:e", 12, "did:key:b", Some(&["tag:c"]))
             .await
             .unwrap();
         // doesn't have requested issuer
-        db.put_activity("a5", "a:f", 13, "did:key:c", Some(&["tag:a"]))
+        db.put_message("a5", "a:f", 13, "did:key:c", Some(&["tag:a"]))
             .await
             .unwrap();
-        let activities = db
-            .get_issuers_activities(
+        let messages = db
+            .get_issuers_messages(
                 &vec!["did:key:a".to_string(), "did:key:b".to_string()],
                 11,
                 Some(&["tag:a", "tag:b"]),
             )
             .await
             .unwrap();
-        assert_eq!(activities, ["a2", "a3"]);
+        assert_eq!(messages, ["a2", "a3"]);
     }
 
     #[tokio::test]
-    async fn db_filters_has_activities() {
+    async fn db_filters_has_messages() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_activity("", "a:b", 10, "", NO_TAGS).await.unwrap();
-        db.put_activity("", "a:c", 11, "", NO_TAGS).await.unwrap();
-        db.put_activity("", "a:d", 12, "", NO_TAGS).await.unwrap();
-        db.put_activity("", "a:e", 13, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:b", 10, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:c", 11, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:d", 12, "", NO_TAGS).await.unwrap();
+        db.put_message("", "a:e", 13, "", NO_TAGS).await.unwrap();
         let has = db
-            .filter_has_activities(&["a:b", "a:c", "a:d", "a:f"], 11)
+            .filter_has_messages(&["a:b", "a:c", "a:d", "a:f"], 11)
             .await
             .unwrap();
         assert_eq!(has, ["a:c", "a:d"]);
