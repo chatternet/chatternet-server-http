@@ -143,6 +143,10 @@ pub fn build_api(
 mod test {
     use std::str::FromStr;
 
+    use activitystreams::activity::Create;
+    use activitystreams::actor::Person;
+    use activitystreams::iri_string::types::IriString;
+    use activitystreams::prelude::{BaseExt, ExtendsExt};
     use activitystreams::{object::Note, prelude::ObjectExt};
     use serde_json;
     use ssi::{jwk::JWK, vc::URI};
@@ -152,7 +156,7 @@ mod test {
     use crate::chatternet::activities::{
         build_message, cid_from_json, cid_to_urn, new_context_loader,
     };
-    use crate::chatternet::didkey::{build_jwk, did_from_jwk};
+    use crate::chatternet::didkey::{self, build_jwk, did_from_jwk};
 
     use super::*;
 
@@ -191,15 +195,22 @@ mod test {
         );
     }
 
-    async fn build_note(jwk: &JWK, message: &str) -> (Credential, String) {
+    async fn build_activity(jwk: &JWK, content: &str) -> (Credential, String) {
+        let did = didkey::did_from_jwk(jwk).unwrap();
         let mut note = Note::new();
-        note.set_content(message);
+        note.set_content(content);
+        let mut actor = Person::new();
+        actor.set_id(did.parse::<IriString>().unwrap());
+        let activity = Create::new(
+            actor.into_any_base().unwrap(),
+            note.into_any_base().unwrap(),
+        );
         let cid = cid_to_urn(
-            cid_from_json(&note, &mut new_context_loader())
+            cid_from_json(&activity, &mut new_context_loader())
                 .await
                 .unwrap(),
         );
-        (build_message(note, &jwk).await.unwrap(), cid)
+        (build_message(activity, &jwk).await.unwrap(), cid)
     }
 
     #[tokio::test]
@@ -207,16 +218,16 @@ mod test {
         let db = Arc::new(Db::new("sqlite::memory:").await.unwrap());
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let api = build_api(db);
-        let (note_1, cid_1) = build_note(&jwk, "abc").await;
-        let (note_2, cid_2) = build_note(&jwk, "abcd").await;
-        let mut note_invalid = note_1.clone();
+        let (activity_1, cid_1) = build_activity(&jwk, "abc").await;
+        let (activity_2, cid_2) = build_activity(&jwk, "abcd").await;
+        let mut note_invalid = activity_1.clone();
         note_invalid.credential_subject.to_single_mut().unwrap().id =
             Some(URI::from_str("a:b").unwrap());
         let response = request()
             .method("POST")
             .path("/pushMessages")
             .json(&PushMessagesBody {
-                messages: vec![note_invalid, note_1, note_2],
+                messages: vec![note_invalid, activity_1, activity_2],
             })
             .reply(&api)
             .await;
@@ -234,8 +245,8 @@ mod test {
         let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
         let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
         let api = build_api(db);
-        let (note_1, _) = build_note(&jwk_1, "").await;
-        let start_timestamp_micros = 1 + note_1
+        let (activity_1, _) = build_activity(&jwk_1, "").await;
+        let start_timestamp_micros = 1 + activity_1
             .proof
             .as_ref()
             .unwrap()
@@ -245,14 +256,14 @@ mod test {
             .unwrap()
             .timestamp_micros();
         tokio::time::sleep(tokio::time::Duration::from_micros(1)).await;
-        let (note_2, _) = build_note(&jwk_1, "").await;
-        let note_2_id = note_2.id.clone();
-        let (note_3, _) = build_note(&jwk_2, "").await;
+        let (activity_2, _) = build_activity(&jwk_1, "").await;
+        let activity_2_id = activity_2.id.clone();
+        let (note_3, _) = build_activity(&jwk_2, "").await;
         let response = request()
             .method("POST")
             .path("/pushMessages")
             .json(&PushMessagesBody {
-                messages: vec![note_1, note_2, note_3],
+                messages: vec![activity_1, activity_2, note_3],
             })
             .reply(&api)
             .await;
@@ -276,6 +287,6 @@ mod test {
             .filter_map(|x| x.ok())
             .collect();
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages.first().unwrap().id, note_2_id);
+        assert_eq!(messages.first().unwrap().id, activity_2_id);
     }
 }

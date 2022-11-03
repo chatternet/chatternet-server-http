@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json;
 use ssi::jsonld::{json_to_dataset, ContextLoader};
 use ssi::jwk::JWK;
+use ssi::ldp::LinkedDataDocument;
 use ssi::urdna2015;
 use ssi::vc::{Credential, LinkedDataProofOptions};
 
@@ -98,10 +99,26 @@ pub async fn verify_message(message: &mut Credential) -> Result<String> {
     {
         return Err(anyhow!(error));
     }
+    let issuer_id = message
+        .get_issuer()
+        .ok_or(anyhow!("message does not contain an issuer ID"))?
+        .to_string();
     let subject = message
         .credential_subject
         .to_single_mut()
         .ok_or(anyhow!("message does not contain a single subject"))?;
+    let actor_id = subject
+        .property_set
+        .as_ref()
+        .and_then(|x| x.get("actor"))
+        .and_then(|x| x.get("id"))
+        .and_then(|x| x.as_str())
+        .ok_or(anyhow!(
+            "message subject does not have a single actor with an ID"
+        ))?;
+    if issuer_id != actor_id {
+        return Err(anyhow!("message issuer ID does not match subject actor ID"));
+    }
     let id = subject
         .id
         .take()
@@ -119,8 +136,10 @@ pub async fn verify_message(message: &mut Credential) -> Result<String> {
 #[cfg(test)]
 mod test {
     use activitystreams::activity::Create;
-    use activitystreams::base::ExtendsExt;
+    use activitystreams::actor::Person;
+    use activitystreams::base::{BaseExt, ExtendsExt};
     use activitystreams::object::Note;
+    use activitystreams::prelude::ActorAndObjectRefExt;
     use tokio;
 
     use super::*;
@@ -141,17 +160,28 @@ mod test {
         assert_ne!(cid_1.to_string(), cid_2.to_string());
     }
 
+    fn build_activity(did: &str, content: &str) -> Create {
+        let mut note = Note::new();
+        note.set_content(content);
+        let mut actor = Person::new();
+        actor.set_id(did.parse::<IriString>().unwrap());
+        Create::new(
+            actor.into_any_base().unwrap(),
+            note.into_any_base().unwrap(),
+        )
+    }
+
     #[tokio::test]
     async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let mut note = Note::new();
-        note.set_content("abc");
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let activity = build_activity(&did, "abc");
         let cid = cid_to_urn(
-            cid_from_json(&note, &mut new_context_loader())
+            cid_from_json(&activity, &mut new_context_loader())
                 .await
                 .unwrap(),
         );
-        let mut message = build_message(note, &jwk).await.unwrap();
+        let mut message = build_message(activity, &jwk).await.unwrap();
         let message_before = serde_json::to_string(&message).unwrap();
         let cid_verified = verify_message(&mut message).await.unwrap();
         assert_eq!(cid, cid_verified);
@@ -161,12 +191,23 @@ mod test {
     }
 
     #[tokio::test]
+    async fn builds_message_wrong_actor_id_doesnt_verify() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let mut activity = build_activity(&did, "abc");
+        let actor = Person::new();
+        activity.set_actor(actor.into_any_base().unwrap());
+        let mut message = build_message(activity, &jwk).await.unwrap();
+        message.id = Some(ssi::vc::URI::try_from("a:b".to_string()).unwrap());
+        verify_message(&mut message).await.unwrap_err();
+    }
+
+    #[tokio::test]
     async fn builds_message_modified_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let mut note = Note::new();
-        note.set_content("abc");
-
-        let mut message = build_message(note.clone(), &jwk).await.unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let activity = build_activity(&did, "abc");
+        let mut message = build_message(activity, &jwk).await.unwrap();
         message.id = Some(ssi::vc::URI::try_from("a:b".to_string()).unwrap());
         verify_message(&mut message).await.unwrap_err();
     }
