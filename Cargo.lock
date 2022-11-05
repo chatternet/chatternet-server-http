@@ -3,26 +3,11 @@
 version = 3
 
 [[package]]
-name = "activitystreams"
-version = "0.7.0-alpha.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "459a89e7d449cf49e57044d59dcf637d2927362b7a75737c90bd3679ba476a78"
-dependencies = [
- "activitystreams-kinds",
- "iri-string 0.5.6",
- "mime",
- "serde",
- "serde_json",
- "time 0.3.16",
-]
-
-[[package]]
 name = "activitystreams-kinds"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d014a4fb8828870b7b46bee6257b9a89d06188ae8d435381ba94f14c8c697d8"
 dependencies = [
- "iri-string 0.5.6",
  "serde",
  "url",
 ]
@@ -450,7 +435,7 @@ dependencies = [
  "async-trait",
  "hex",
  "http",
- "iri-string 0.6.0",
+ "iri-string",
  "libipld 0.14.0",
  "serde",
  "serde_with 2.0.1",
@@ -492,10 +477,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 name = "chatternet-server-http"
 version = "0.1.0"
 dependencies = [
- "activitystreams",
  "activitystreams-kinds",
  "anyhow",
- "chrono",
+ "async-trait",
  "cid",
  "clap",
  "did-method-key",
@@ -1673,15 +1657,6 @@ checksum = "b3243407942b67158fec520543d894f8e39e1325e7316314982f192f8adb4dfc"
 dependencies = [
  "pct-str",
  "smallvec",
-]
-
-[[package]]
-name = "iri-string"
-version = "0.5.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf071934ee7ee97e52fa1868a9540a7885eab75926bd70794030304a9797cea1"
-dependencies = [
- "serde",
 ]
 
 [[package]]
@@ -3124,7 +3099,7 @@ checksum = "ec4cc2eafb2354c1aeaeac5f53b7726ca4ea5ad16314a0b5ebacb6676f599c2b"
 dependencies = [
  "hex",
  "http",
- "iri-string 0.6.0",
+ "iri-string",
  "k256",
  "rand 0.8.5",
  "sha3",
@@ -3139,7 +3114,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afe6254970fe99274b440ba4c5e9891550939e7a3c10274029b2e8a9ab2d5c8b"
 dependencies = [
  "base64 0.12.3",
- "iri-string 0.6.0",
+ "iri-string",
  "serde",
  "serde_json",
  "siwe",

@@ -6,19 +6,11 @@ use futures::TryStreamExt;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
-fn build_in_parameters(num_parameters: usize, start: Option<usize>) -> String {
-    let start = start.unwrap_or(1);
-    (start..start + num_parameters)
-        .map(|x| format!("${}", x))
-        .collect::<Vec<String>>()
-        .join(",")
-}
-
 pub struct Db {
     pool: SqlitePool,
 }
 
-pub const NO_TAGS: Option<&[&str]> = None;
+pub const UNADDRESSED: Option<&[&str]> = None;
 
 impl Db {
     pub async fn new(url: &str) -> Result<Self> {
@@ -29,39 +21,10 @@ impl Db {
             "\
             CREATE TABLE IF NOT EXISTS `Messages` \
             (\
+                `idx` INTEGER PRIMARY KEY AUTOINCREMENT,
                 `message` TEXT NOT NULL, \
-                `message_id` TEXT PRIMARY KEY, \
-                `timestamp_micros` BIGINT NOT NULL, \
-                `issuer_did` TEXT NOT NULL\
-            );\
-            ",
-        )
-        .execute(&mut conn)
-        .await?;
-        sqlx::query(
-            "\
-            CREATE INDEX IF NOT EXISTS `timestamp_micros` \
-            ON `Messages`(`timestamp_micros`);\
-            ",
-        )
-        .execute(&mut conn)
-        .await?;
-        sqlx::query(
-            "\
-            CREATE INDEX IF NOT EXISTS `issuer_did` \
-            ON `Messages`(`issuer_did`);\
-            ",
-        )
-        .execute(&mut conn)
-        .await?;
-
-        sqlx::query(
-            "\
-            CREATE TABLE IF NOT EXISTS `MessagesTags` \
-            (\
                 `message_id` TEXT NOT NULL, \
-                `tag_id` TEXT NOT NULL, \
-                `timestamp_micros` BIGINT NOT NULL\
+                `actor_id` TEXT NOT NULL\
             );\
             ",
         )
@@ -70,23 +33,71 @@ impl Db {
         sqlx::query(
             "\
             CREATE INDEX IF NOT EXISTS `message_id` \
-            ON `MessagesTags`(`message_id`);\
+            ON `Messages`(`message_id`);\
             ",
         )
         .execute(&mut conn)
         .await?;
         sqlx::query(
             "\
-            CREATE INDEX IF NOT EXISTS `tag_id` \
-            ON `MessagesTags`(`tag_id`);\
+            CREATE INDEX IF NOT EXISTS `actor_id` \
+            ON `Messages`(`actor_id`);\
+            ",
+        )
+        .execute(&mut conn)
+        .await?;
+
+        sqlx::query(
+            "\
+            CREATE TABLE IF NOT EXISTS `MessagesAudiences` \
+            (\
+                `message_id` TEXT NOT NULL, \
+                `audience_id` TEXT NOT NULL\
+            );\
             ",
         )
         .execute(&mut conn)
         .await?;
         sqlx::query(
             "\
-            CREATE INDEX IF NOT EXISTS `timestamp_micros` \
-            ON `MessagesTags`(`timestamp_micros`);\
+            CREATE INDEX IF NOT EXISTS `message_id` \
+            ON `MessagesAudiences`(`message_id`);\
+            ",
+        )
+        .execute(&mut conn)
+        .await?;
+        sqlx::query(
+            "\
+            CREATE INDEX IF NOT EXISTS `audience_id` \
+            ON `MessagesAudiences`(`audience_id`);\
+            ",
+        )
+        .execute(&mut conn)
+        .await?;
+
+        sqlx::query(
+            "\
+            CREATE TABLE IF NOT EXISTS `ActorsAudiences` \
+            (\
+                `actor_id` TEXT NOT NULL, \
+                `audience_id` TEXT NOT NULL\
+            );\
+            ",
+        )
+        .execute(&mut conn)
+        .await?;
+        sqlx::query(
+            "\
+            CREATE INDEX IF NOT EXISTS `actor_id` \
+            ON `ActorsAudiences`(`actor_id`);\
+            ",
+        )
+        .execute(&mut conn)
+        .await?;
+        sqlx::query(
+            "\
+            CREATE INDEX IF NOT EXISTS `audience_id` \
+            ON `ActorsAudiences`(`audience_id`);\
             ",
         )
         .execute(&mut conn)
@@ -99,88 +110,89 @@ impl Db {
         &self,
         message: &str,
         message_id: &str,
-        timestamp_micros: i64,
-        issuer_did: &str,
-        tags_id: Option<&[impl AsRef<str>]>,
+        actor_id: &str,
+        audiences_id: &[impl AsRef<str>],
     ) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
         sqlx::query(
             "\
             INSERT INTO `Messages` \
-            (`message`, `message_id`, `timestamp_micros`, `issuer_did`) \
-            VALUES($1, $2, $3, $4)\
+            (`message`, `message_id`, `actor_id`) \
+            VALUES($1, $2, $3)\
             ",
         )
         .bind(message)
         .bind(message_id)
-        .bind(timestamp_micros)
-        .bind(issuer_did)
+        .bind(actor_id)
         .execute(&mut conn)
         .await?;
-        if let Some(tags_id) = tags_id {
-            for tag_id in tags_id {
-                sqlx::query(
-                    "\
-                    INSERT INTO `MessagesTags` \
-                    (`message_id`, `tag_id`, `timestamp_micros`) \
-                    VALUES($1, $2, $3);\
-                    ",
-                )
-                .bind(message_id)
-                .bind(tag_id.as_ref())
-                .bind(timestamp_micros)
-                .execute(&mut conn)
-                .await?;
-            }
+        for audience_id in audiences_id {
+            sqlx::query(
+                "\
+                INSERT INTO `MessagesAudiences` \
+                (`message_id`, `audience_id`) \
+                VALUES($1, $2);\
+                ",
+            )
+            .bind(message_id)
+            .bind(audience_id.as_ref())
+            .execute(&mut conn)
+            .await?;
         }
         Ok(())
     }
 
-    pub async fn get_issuers_messages(
-        &self,
-        issuers_did: &Vec<String>,
-        start_timestamp_micros: i64,
-        tags_id: Option<&[impl AsRef<str>]>,
-    ) -> Result<Vec<String>> {
+    pub async fn put_audience(&self, actor_id: &str, audience_id: &str) -> Result<()> {
         let mut conn = self.pool.acquire().await?;
-        let parameters_issuer = build_in_parameters(issuers_did.len(), Some(2));
-        let query_str = if let Some(tags_id) = tags_id {
-            let parameters_tag = build_in_parameters(tags_id.len(), Some(2 + issuers_did.len()));
-            format!(
-                "\
-                SELECT `message` FROM `Messages` \
-                WHERE `timestamp_micros` >= $1 \
-                AND `issuer_did` IN ({}) \
-                AND `message_id` IN (\
-                    SELECT `message_id` FROM `MessagesTags` \
-                    WHERE `timestamp_micros` >= $1 \
-                    AND `MessagesTags`.`tag_id` IN ({})\
-                ) \
-                ORDER BY `timestamp_micros`;\
-                ",
-                parameters_issuer, parameters_tag,
-            )
-        } else {
-            format!(
-                "\
-                SELECT `message` FROM `Messages` \
-                WHERE `timestamp_micros` >= $1 \
-                AND `issuer_did` IN ({}) \
-                ORDER BY `timestamp_micros`;\
-                ",
-                parameters_issuer,
-            )
-        };
-        let mut query = sqlx::query(&query_str);
-        query = query.bind(start_timestamp_micros);
-        for issuer_did in issuers_did {
-            query = query.bind(issuer_did);
-        }
-        if let Some(tags_id) = tags_id {
-            for tag_id in tags_id {
-                query = query.bind(tag_id.as_ref());
-            }
-        }
+        sqlx::query(
+            "\
+            INSERT INTO `ActorsAudiences` \
+            (`actor_id`, `audience_id`) \
+            VALUES($1, $2)\
+            ",
+        )
+        .bind(actor_id)
+        .bind(audience_id)
+        .execute(&mut conn)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn has_message(&self, id: &str) -> Result<bool> {
+        let mut conn = self.pool.acquire().await?;
+        let query = sqlx::query(
+            "\
+            SELECT 1 FROM `Messages` \
+            WHERE `message_id` = $1 \
+            LIMIT 1;\
+            ",
+        )
+        .bind(id);
+        Ok(query.fetch_optional(&mut conn).await?.is_some())
+    }
+
+    pub async fn get_inbox_for_did(&self, did: &str, count: i64) -> Result<Vec<String>> {
+        let mut conn = self.pool.acquire().await?;
+        let query = sqlx::query(
+            "\
+            SELECT `message` FROM `Messages` \
+            WHERE `actor_id` IN (\
+                SELECT `audience_id` FROM `ActorsAudiences` \
+                WHERE `actor_id` = $1
+            ) \
+            AND `message_id` IN (\
+                SELECT `message_id` FROM `MessagesAudiences` \
+                WHERE `MessagesAudiences`.`audience_id` IN (\
+                    SELECT `audience_id` FROM `ActorsAudiences` \
+                    WHERE `actor_id` = $1
+                )\
+            ) \
+            ORDER BY `idx` DESC
+            LIMIT $2;\
+            ",
+        )
+        .bind(did)
+        .bind(count);
         let mut messages = Vec::new();
         let mut rows = query.fetch(&mut conn);
         while let Some(row) = rows.try_next().await? {
@@ -188,34 +200,6 @@ impl Db {
             messages.push(message.to_string());
         }
         Ok(messages)
-    }
-
-    pub async fn filter_has_messages(
-        &self,
-        ids: &[impl AsRef<str>],
-        start_timestamp_micros: i64,
-    ) -> Result<Vec<String>> {
-        let mut conn = self.pool.acquire().await?;
-        let parameters = build_in_parameters(ids.len(), Some(2));
-        let query_str = format!(
-            "\
-            SELECT `message_id` FROM `Messages` \
-            WHERE `timestamp_micros` >= $1 AND `message_id` IN ({});\
-            ",
-            parameters
-        );
-        let mut query = sqlx::query(&query_str);
-        query = query.bind(start_timestamp_micros);
-        for message_id in ids {
-            query = query.bind(message_id.as_ref());
-        }
-        let mut filtered_ids = Vec::new();
-        let mut rows = query.fetch(&mut conn);
-        while let Some(row) = rows.try_next().await? {
-            let message_id: &str = row.try_get("message_id")?;
-            filtered_ids.push(message_id.to_string());
-        }
-        Ok(filtered_ids)
     }
 }
 
@@ -233,85 +217,81 @@ mod test {
     #[tokio::test]
     async fn db_puts_message() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_message("abc", "a:b", 10, "did:a", NO_TAGS)
+        db.put_message("message", "id:1", "did:1", &["did:1"])
             .await
             .unwrap();
-        db.put_message("abc", "a:c", 10, "did:a", Some(&["tag:a"]))
+        db.put_message("message", "id:2", "did:1", &["tag:1"])
             .await
             .unwrap();
     }
 
     #[tokio::test]
-    async fn db_gets_issuers_messages() {
+    async fn db_checks_has_message() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        // too early
-        db.put_message("a1", "a:b", 10, "did:key:a", NO_TAGS)
+        db.put_message("message", "id:1", "did:1", &["did:1"])
             .await
             .unwrap();
-        db.put_message("a2", "a:c", 11, "did:key:a", NO_TAGS)
+        db.put_message("message", "id:2", "did:1", &["tag:1"])
             .await
             .unwrap();
-        db.put_message("a3", "a:d", 12, "did:key:b", NO_TAGS)
-            .await
-            .unwrap();
-        // doesn't have requested issuer
-        db.put_message("a4", "a:e", 13, "did:key:c", NO_TAGS)
-            .await
-            .unwrap();
-        let messages = db
-            .get_issuers_messages(
-                &vec!["did:key:a".to_string(), "did:key:b".to_string()],
-                11,
-                NO_TAGS,
-            )
-            .await
-            .unwrap();
-        assert_eq!(messages, ["a2", "a3"]);
+        assert!(db.has_message("id:1").await.unwrap());
+        assert!(db.has_message("id:2").await.unwrap());
+        assert!(!db.has_message("id:3").await.unwrap());
     }
 
     #[tokio::test]
-    async fn db_gets_issuers_messages_with_tags() {
+    async fn db_puts_follows() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        // too early
-        db.put_message("a1", "a:b", 10, "did:key:a", Some(&["tag:a"]))
-            .await
-            .unwrap();
-        db.put_message("a2", "a:c", 11, "did:key:a", Some(&["tag:a"]))
-            .await
-            .unwrap();
-        db.put_message("a3", "a:d", 12, "did:key:b", Some(&["tag:b", "tag:c"]))
-            .await
-            .unwrap();
-        // doesn't have requested tags
-        db.put_message("a4", "a:e", 12, "did:key:b", Some(&["tag:c"]))
-            .await
-            .unwrap();
-        // doesn't have requested issuer
-        db.put_message("a5", "a:f", 13, "did:key:c", Some(&["tag:a"]))
-            .await
-            .unwrap();
-        let messages = db
-            .get_issuers_messages(
-                &vec!["did:key:a".to_string(), "did:key:b".to_string()],
-                11,
-                Some(&["tag:a", "tag:b"]),
-            )
-            .await
-            .unwrap();
-        assert_eq!(messages, ["a2", "a3"]);
+        db.put_audience("did:1", "did:2").await.unwrap();
+        db.put_audience("did:2", "tag:1").await.unwrap();
     }
 
     #[tokio::test]
-    async fn db_filters_has_messages() {
+    async fn db_gets_inbox_for_did() {
         let db = Db::new("sqlite::memory:").await.unwrap();
-        db.put_message("", "a:b", 10, "", NO_TAGS).await.unwrap();
-        db.put_message("", "a:c", 11, "", NO_TAGS).await.unwrap();
-        db.put_message("", "a:d", 12, "", NO_TAGS).await.unwrap();
-        db.put_message("", "a:e", 13, "", NO_TAGS).await.unwrap();
-        let has = db
-            .filter_has_messages(&["a:b", "a:c", "a:d", "a:f"], 11)
+
+        db.put_message("message 1", "id:1", "did:1", &["did:1"])
             .await
             .unwrap();
-        assert_eq!(has, ["a:c", "a:d"]);
+        db.put_message("message 2", "id:2", "did:1", &["tag:1"])
+            .await
+            .unwrap();
+        db.put_message("message 3", "id:3", "did:2", &["tag:1"])
+            .await
+            .unwrap();
+        db.put_message("message 4", "id:4", "did:2", &["tag:2"])
+            .await
+            .unwrap();
+
+        // did:1 isn't in any audience yet
+        assert!(db.get_inbox_for_did("did:1", 1).await.unwrap().is_empty());
+
+        // did:1 follows self
+        db.put_audience("did:1", "did:1").await.unwrap();
+        assert_eq!(
+            db.get_inbox_for_did("did:1", 1).await.unwrap(),
+            ["message 1"]
+        );
+
+        // did:1 follows tag:1
+        db.put_audience("did:1", "tag:1").await.unwrap();
+        // gets the latest message by self about tag:1
+        assert_eq!(
+            db.get_inbox_for_did("did:1", 1).await.unwrap(),
+            ["message 2"]
+        );
+        // can get more messages
+        assert_eq!(
+            db.get_inbox_for_did("did:1", 3).await.unwrap(),
+            ["message 2", "message 1"]
+        );
+
+        // did:1 follows did:2
+        db.put_audience("did:1", "did:2").await.unwrap();
+        // gets the latest message by did:2 about tag:1
+        assert_eq!(
+            db.get_inbox_for_did("did:1", 3).await.unwrap(),
+            ["message 3", "message 2", "message 1"]
+        );
     }
 }
