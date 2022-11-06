@@ -66,6 +66,23 @@ fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
     Ok(chained.collect())
 }
 
+async fn handle_follow(message: &Message, db: &Db) -> Result<()> {
+    let audience_id = message
+        .members
+        .as_ref()
+        .and_then(|x| x.get("object"))
+        .and_then(|x| match x {
+            Value::String(audience_id) => Some(audience_id.as_str()),
+            Value::Object(object) => object.get("id").and_then(|x| x.as_str()),
+            _ => None,
+        });
+    if let Some(audience_id) = audience_id {
+        db.put_audience(&message.actor.id, audience_id)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn handle_outbox(
     did: String,
     message: Message,
@@ -84,22 +101,7 @@ async fn handle_outbox(
     let audiences_id = build_audiences_id(&message).map_err(Error)?;
 
     match message.message_type {
-        MessageType::Follow => {
-            let audience_id = message
-                .members
-                .as_ref()
-                .and_then(|x| x.get("object"))
-                .and_then(|x| match x {
-                    Value::String(audience_id) => Some(audience_id.as_str()),
-                    Value::Object(object) => object.get("id").and_then(|x| x.as_str()),
-                    _ => None,
-                });
-            if let Some(audience_id) = audience_id {
-                db.put_audience(&message.actor.id, audience_id)
-                    .await
-                    .map_err(Error)?;
-            }
-        }
+        MessageType::Follow => handle_follow(&message, &db).await.map_err(Error)?,
         _ => (),
     }
 
