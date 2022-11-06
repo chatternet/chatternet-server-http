@@ -1,5 +1,4 @@
 use anyhow::{anyhow, Result};
-use serde_json::Value;
 use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
@@ -74,11 +73,7 @@ async fn handle_follow(message: &Message, connection: &mut Connection) -> Result
         .members
         .as_ref()
         .and_then(|x| x.get("object"))
-        .and_then(|x| match x {
-            Value::String(audience_id) => Some(audience_id.as_str()),
-            Value::Object(object) => object.get("id").and_then(|x| x.as_str()),
-            _ => None,
-        });
+        .and_then(|x| x.as_str());
     if let Some(audience_id) = audience_id {
         connection
             .put_actor_audience(&message.actor.id, audience_id)
@@ -87,7 +82,7 @@ async fn handle_follow(message: &Message, connection: &mut Connection) -> Result
     Ok(())
 }
 
-async fn handle_outbox(
+async fn handle_did_outbox(
     did: String,
     message: Message,
     db_pool: Arc<DbPool>,
@@ -137,7 +132,10 @@ async fn handle_outbox(
     Ok(StatusCode::OK)
 }
 
-async fn handle_inbox(did: String, db_pool: Arc<DbPool>) -> Result<impl warp::Reply, Rejection> {
+async fn handle_did_inbox(
+    did: String,
+    db_pool: Arc<DbPool>,
+) -> Result<impl warp::Reply, Rejection> {
     let mut connection = db_pool
         .acquire()
         .await
@@ -147,6 +145,24 @@ async fn handle_inbox(did: String, db_pool: Arc<DbPool>) -> Result<impl warp::Re
         .get_inbox_for_did(&did, 32)
         .await
         .map_err(Error)?;
+    let messages = messages
+        .iter()
+        .map(|x| serde_json::from_str(x).map_err(|x| anyhow!(x)))
+        .collect::<Result<Vec<Message>>>()
+        .map_err(Error)?;
+    Ok(warp::reply::json(&messages))
+}
+
+async fn handle_did_following(
+    did: String,
+    db_pool: Arc<DbPool>,
+) -> Result<impl warp::Reply, Rejection> {
+    let mut connection = db_pool
+        .acquire()
+        .await
+        .map_err(|x| anyhow!(x))
+        .map_err(Error)?;
+    let messages = connection.get_actor_audiences(&did).await.map_err(Error)?;
     Ok(warp::reply::json(&messages))
 }
 
@@ -161,20 +177,29 @@ pub fn build_api(
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
-    let route_outbox = warp::post()
+    let route_did_outbox = warp::post()
         .and(warp::path!("did" / String / "outbox"))
         .and(warp::body::json())
         .and(with_resource(db_pool.clone()))
-        .and_then(handle_outbox);
-    let route_inbox = warp::post()
+        .and_then(handle_did_outbox);
+    let route_did_inbox = warp::get()
         .and(warp::path!("did" / String / "inbox"))
         .and(with_resource(db_pool.clone()))
-        .and_then(handle_inbox);
-    route_version.or(route_outbox).or(route_inbox)
+        .and_then(handle_did_inbox);
+    let route_did_following = warp::get()
+        .and(warp::path!("did" / String / "following"))
+        .and(with_resource(db_pool.clone()))
+        .and_then(handle_did_following);
+    // TODO: did_document, did_actor, did_followers with pagination
+    route_version
+        .or(route_did_outbox)
+        .or(route_did_inbox)
+        .or(route_did_following)
 }
 
 #[cfg(test)]
 mod test {
+    use serde::Serialize;
     use serde_json::json;
     use ssi::jwk::JWK;
     use tokio;
@@ -196,9 +221,20 @@ mod test {
         assert_eq!(response.body(), VERSION);
     }
 
-    async fn build_message(content: &str, jwk: &JWK) -> Message {
+    const NO_VEC: Option<&Vec<String>> = None;
+
+    async fn build_message(
+        content: &str,
+        to: Option<&impl Serialize>,
+        cc: Option<&impl Serialize>,
+        audience: Option<&impl Serialize>,
+        jwk: &JWK,
+    ) -> Message {
         let did = didkey::did_from_jwk(jwk).unwrap();
         let members = json!({
+            "to": to,
+            "cc": cc,
+            "audience": audience,
             "object": {
                 "type": "Note",
                 "content": content
@@ -220,7 +256,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = build_message("message", &jwk).await;
+        let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = request()
             .method("POST")
@@ -246,7 +282,7 @@ mod test {
         let api = build_api(db_pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = build_message("message", &jwk).await;
+        let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = request()
             .method("POST")
@@ -264,7 +300,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = build_message("message", &jwk).await;
+        let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let mut message_2 = message.clone();
         message_2.id = Some("id:a".to_string());
@@ -284,7 +320,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = build_message("message", &jwk).await;
+        let mut message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
         message.members.as_mut().and_then(|x| {
             x.insert(
                 "bcc".to_string(),
@@ -308,7 +344,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = build_message("message", &jwk).await;
+        let mut message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
         message.members.as_mut().and_then(|x| {
             x.insert(
                 "bto".to_string(),
@@ -323,5 +359,168 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    async fn build_follow(follow_id: &str, jwk: &JWK) -> Message {
+        let did = didkey::did_from_jwk(jwk).unwrap();
+        let members = json!({ "object": follow_id })
+            .as_object()
+            .unwrap()
+            .to_owned();
+        let actor = MessageActor::new(did, None, None);
+        Message::new(actor, MessageType::Follow, Some(members), &jwk)
+            .await
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn api_outbox_handles_follow() {
+        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(db_pool);
+
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did))
+                .json(&build_follow("tag:1", &jwk).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/following", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let ids: Vec<String> = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(ids, ["tag:1"]);
+    }
+
+    #[tokio::test]
+    async fn api_inbox_returns_messages() {
+        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(db_pool);
+
+        let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
+
+        let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_2 = didkey::did_from_jwk(&jwk_2).unwrap();
+
+        let jwk_3 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_3 = didkey::did_from_jwk(&jwk_3).unwrap();
+
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_1))
+                .json(&build_message("message 1", Some(&[&did_1]), NO_VEC, NO_VEC, &jwk_1).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_1))
+                .json(&build_message("message 2", Some(&[&did_2]), NO_VEC, NO_VEC, &jwk_1).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_1))
+                .json(&build_message("message 3", NO_VEC, Some(&[&did_2]), NO_VEC, &jwk_1).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_1))
+                .json(&build_message("message 4", NO_VEC, NO_VEC, Some(&[&did_2]), &jwk_1).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        // not seen because not addressed to did:2 audiences
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_1))
+                .json(&build_message("message 5", NO_VEC, NO_VEC, Some(&[&did_3]), &jwk_1).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        // not seen because not following actor
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_3))
+                .json(&build_message("message 6", NO_VEC, NO_VEC, Some(&[&did_2]), &jwk_3).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        // did_2 does not yet follow any did, cannot receive any messages
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/inbox", did_2))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
+        assert!(messages.is_empty());
+
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/outbox", did_2))
+                .json(&build_follow(&did_1, &jwk_2).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/inbox", did_2))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
+        let messages: Vec<String> = messages
+            .into_iter()
+            .map(|x| {
+                x.members
+                    .as_ref()
+                    .unwrap()
+                    .get("object")
+                    .unwrap()
+                    .get("content")
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(messages, ["message 3", "message 2", "message 1"]);
     }
 }

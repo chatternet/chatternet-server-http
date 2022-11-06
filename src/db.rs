@@ -85,6 +85,7 @@ impl TableMessages for Connection {
 pub trait TableMessagesAudiences {
     async fn create_messages_audiences(&mut self) -> Result<()>;
     async fn put_message_audience(&mut self, message_id: &str, audience_id: &str) -> Result<()>;
+    async fn get_message_audiences(&mut self, message_id: &str) -> Result<Vec<String>>;
 }
 
 #[async_trait]
@@ -134,6 +135,23 @@ impl TableMessagesAudiences for Connection {
         .execute(&mut *self)
         .await?;
         Ok(())
+    }
+
+    async fn get_message_audiences(&mut self, message_id: &str) -> Result<Vec<String>> {
+        let query = sqlx::query(
+            "\
+            SELECT `audience_id` FROM `messagesAudiences` \
+            WHERE `message_id` = $1;\
+            ",
+        )
+        .bind(message_id);
+        let mut audiences_id = Vec::new();
+        let mut rows = query.fetch(&mut *self);
+        while let Some(row) = rows.try_next().await? {
+            let audience_id: &str = row.try_get("audience_id")?;
+            audiences_id.push(audience_id.to_string());
+        }
+        Ok(audiences_id)
     }
 }
 
@@ -222,13 +240,17 @@ impl TablesActivityPub for Connection {
         let query = sqlx::query(
             "\
             SELECT `message` FROM `Messages` \
-            WHERE `actor_id` IN (\
-                SELECT `audience_id` FROM `ActorsAudiences` \
-                WHERE `actor_id` = $1
-            ) \
+            WHERE (\
+                `actor_id` = $1
+                OR `actor_id` IN (\
+                    SELECT `audience_id` FROM `ActorsAudiences` \
+                    WHERE `actor_id` = $1
+                )\
+            )\
             AND `message_id` IN (\
                 SELECT `message_id` FROM `MessagesAudiences` \
-                WHERE `MessagesAudiences`.`audience_id` IN (\
+                WHERE `MessagesAudiences`.`audience_id` = $1
+                OR `MessagesAudiences`.`audience_id` IN (\
                     SELECT `audience_id` FROM `ActorsAudiences` \
                     WHERE `actor_id` = $1
                 )\
@@ -319,6 +341,32 @@ mod test {
     }
 
     #[tokio::test]
+    async fn puts_and_gets_message_audiences() {
+        let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
+        let mut connection = db_pool.acquire().await.unwrap();
+        connection
+            .put_message_audience("id:1", "did:2")
+            .await
+            .unwrap();
+        connection
+            .put_message_audience("id:1", "tag:1")
+            .await
+            .unwrap();
+        connection
+            .put_message_audience("id:2", "tag:1")
+            .await
+            .unwrap();
+        assert_eq!(
+            connection.get_message_audiences("id:1").await.unwrap(),
+            ["did:2", "tag:1"]
+        );
+        assert_eq!(
+            connection.get_message_audiences("id:2").await.unwrap(),
+            ["tag:1"]
+        );
+    }
+
+    #[tokio::test]
     async fn db_gets_inbox_for_did() {
         let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
         let mut connection = db_pool.acquire().await.unwrap();
@@ -356,18 +404,7 @@ mod test {
             .await
             .unwrap();
 
-        // did:1 isn't in any audience yet
-        assert!(connection
-            .get_inbox_for_did("did:1", 1)
-            .await
-            .unwrap()
-            .is_empty());
-
-        // did:1 follows self
-        connection
-            .put_actor_audience("did:1", "did:1")
-            .await
-            .unwrap();
+        // did:1 gets messages addressed to self
         assert_eq!(
             connection.get_inbox_for_did("did:1", 1).await.unwrap(),
             ["message 1"]
@@ -378,7 +415,6 @@ mod test {
             .put_actor_audience("did:1", "tag:1")
             .await
             .unwrap();
-        // gets the latest message by self about tag:1
         assert_eq!(
             connection.get_inbox_for_did("did:1", 1).await.unwrap(),
             ["message 2"]
