@@ -5,7 +5,7 @@ use clap::Parser;
 use tokio;
 use warp;
 
-use chatternet_server_http::db::Db;
+use chatternet_server_http::db::new_db_pool;
 use chatternet_server_http::handlers::build_api;
 
 #[derive(Parser, Debug)]
@@ -20,8 +20,8 @@ struct Args {
 async fn main() -> Result<()> {
     pretty_env_logger::init();
     let args = Args::parse();
-    let db = Arc::new(Db::new("sqlite::memory:").await?);
-    let routes = build_api(db);
+    let db_pool = Arc::new(new_db_pool("sqlite::memory:").await?);
+    let routes = build_api(db_pool);
     let address = if args.loopback {
         [127, 0, 0, 1]
     } else {
