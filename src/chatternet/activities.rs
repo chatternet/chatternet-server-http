@@ -99,6 +99,7 @@ pub struct Message {
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "https://w3id.org/security#proof")]
     pub proof: Option<Proof>,
 }
 
@@ -140,10 +141,7 @@ impl Message {
         // messages cannot override old ones
         let actor_did = &actor.id.to_string();
         let mut message = Message {
-            context: vec![
-                ldcontexts::ACTIVITY_STREAMS_URI.to_string(),
-                "https://www.w3.org/2018/credentials/v1".to_string(),
-            ],
+            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
             id: None,
             message_type: message_type,
             actor,
