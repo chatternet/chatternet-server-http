@@ -48,14 +48,36 @@ pub fn cid_to_urn(cid: Cid) -> String {
     format!("urn:cid:{}", cid.to_string())
 }
 
+pub fn actor_id_from_did(did: &str) -> Result<String> {
+    if !did.starts_with("did:") {
+        Err(anyhow!("DID has invalid prefix"))?;
+    }
+    Ok(format!("{}/actor", did))
+}
+
+pub fn did_from_actor_id(actor_id: &str) -> Result<String> {
+    let (did, path) = actor_id
+        .split_once("/")
+        .ok_or(anyhow!("actor ID is not a did and path"))?;
+    if !did.starts_with("did:") {
+        Err(anyhow!("actor ID is not a DID"))?;
+    }
+    if path != "actor" {
+        Err(anyhow!("actor ID path is not an actor"))?;
+    }
+    Ok(did.to_string())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct MessageActor {
+pub struct Actor {
     #[serde(rename = "@context")]
     pub context: Vec<String>,
-    pub id: String,
-    pub following: String,
-    pub followers: String,
+    pub id: URI,
+    pub inbox: URI,
+    pub outbox: URI,
+    pub following: URI,
+    pub followers: URI,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,18 +85,28 @@ pub struct MessageActor {
     pub members: Option<Map<String, Value>>,
 }
 
-impl MessageActor {
-    pub fn new(did: String, name: Option<String>, members: Option<Map<String, Value>>) -> Self {
-        let following = format!("{}/following", did);
-        let followers = format!("{}/followers", did);
-        MessageActor {
+impl Actor {
+    pub fn new(
+        did: String,
+        name: Option<String>,
+        members: Option<Map<String, Value>>,
+    ) -> Result<Self> {
+        let actor_id = actor_id_from_did(&did)?;
+        let id = URI::from_str(&actor_id)?;
+        let inbox = URI::try_from(format!("{}/inbox", &actor_id))?;
+        let outbox = URI::try_from(format!("{}/outbox", &actor_id))?;
+        let following = URI::try_from(format!("{}/following", &actor_id))?;
+        let followers = URI::try_from(format!("{}/followers", &actor_id))?;
+        Ok(Actor {
             context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
-            id: did,
+            id,
+            inbox,
+            outbox,
             following,
             followers,
             name,
             members,
-        }
+        })
     }
 }
 
@@ -91,10 +123,10 @@ pub struct Message {
     #[serde(rename = "@context")]
     pub context: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: Option<URI>,
     #[serde(rename = "type")]
     pub message_type: MessageType,
-    pub actor: MessageActor,
+    pub actor: URI,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
@@ -132,25 +164,28 @@ async fn build_proof(
 
 impl Message {
     pub async fn new(
-        actor: MessageActor,
+        actor_did: &str,
         message_type: MessageType,
         members: Option<Map<String, Value>>,
         jwk: &JWK,
     ) -> Result<Self> {
+        let actor_id = URI::try_from(actor_id_from_did(actor_did)?)?;
         // build an ID which is isomorphic to the subject object such that new
         // messages cannot override old ones
-        let actor_did = &actor.id.to_string();
         let mut message = Message {
             context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
             id: None,
             message_type: message_type,
-            actor,
+            actor: actor_id,
             members,
             proof: None,
         };
-        message.id = Some(cid_to_urn(
-            cid_from_json(&message, &mut new_context_loader(), None).await?,
-        ));
+        message.id = Some(
+            URI::try_from(cid_to_urn(
+                cid_from_json(&message, &mut new_context_loader(), None).await?,
+            ))
+            .unwrap(),
+        );
         message.proof = Some(build_proof(&message, &actor_did, jwk).await?);
         Ok(message)
     }
@@ -160,13 +195,13 @@ impl Message {
         let proof_purpose = message
             .get_default_proof_purpose()
             .ok_or(anyhow!("message has no proof purpose"))?;
-        let did = &message.actor.id;
+        let actor_did = did_from_actor_id(message.actor.as_str())?;
         let proof = message
             .proof
             .take()
             .ok_or(anyhow!("message does not contain a proof"))?;
         let verification_methods =
-            did_resolve::get_verification_methods(&did, proof_purpose, &DIDKey).await?;
+            did_resolve::get_verification_methods(&actor_did, proof_purpose, &DIDKey).await?;
         match &proof.verification_method {
             Some(verification_method) => {
                 if !verification_methods.contains_key(verification_method) {
@@ -182,12 +217,17 @@ impl Message {
             .id
             .take()
             .ok_or(anyhow!("message does not contain an ID"))?;
-        if id != cid_to_urn(cid_from_json(&message, &mut new_context_loader(), None).await?) {
+        if id
+            != URI::try_from(cid_to_urn(
+                cid_from_json(&message, &mut new_context_loader(), None).await?,
+            ))
+            .unwrap()
+        {
             return Err(anyhow!("message ID does not match its contents"));
         }
         message.id = Some(id.clone());
         message.proof = Some(proof);
-        Ok(id)
+        Ok(id.to_string())
     }
 
     pub fn set(&mut self, properties: &Value) -> Result<()> {
@@ -257,6 +297,24 @@ mod test {
         assert_ne!(cid_1.to_string(), cid_2.to_string());
     }
 
+    #[test]
+    fn transforms_did_to_and_from_actor_id() {
+        assert_eq!(
+            actor_id_from_did("did:example:a").unwrap(),
+            "did:example:a/actor"
+        );
+        actor_id_from_did("did").unwrap_err();
+        actor_id_from_did("").unwrap_err();
+        assert_eq!(
+            did_from_actor_id("did:example:a/actor").unwrap(),
+            "did:example:a"
+        );
+        did_from_actor_id("did:example:a/other").unwrap_err();
+        did_from_actor_id("did:example:a/").unwrap_err();
+        did_from_actor_id("did:example:a").unwrap_err();
+        did_from_actor_id("").unwrap_err();
+    }
+
     #[tokio::test]
     async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
@@ -270,8 +328,7 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        let actor = MessageActor::new(did, None, None);
-        let message = Message::new(actor, MessageType::Create, Some(members), &jwk)
+        let message = Message::new(&did, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap();
         message.verify().await.unwrap();
@@ -290,8 +347,7 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        let actor = MessageActor::new(did, None, None);
-        let mut message = Message::new(actor, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap();
         let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
@@ -313,11 +369,10 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        let actor = MessageActor::new(did.clone(), None, None);
-        let mut message = Message::new(actor, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap();
-        message.id = Some("a:b".to_string());
+        message.id = Some(URI::from_str("a:b").unwrap());
         message.proof = Some(build_proof(&message, &did, &jwk).await.unwrap());
         message.verify().await.unwrap_err();
     }
@@ -335,8 +390,7 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        let actor = MessageActor::new(did, None, None);
-        let mut message = Message::new(actor, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap();
         message
@@ -371,8 +425,7 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        let actor = MessageActor::new(did, None, None);
-        let mut message = Message::new(actor, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap();
         message.members.as_mut().unwrap().insert(

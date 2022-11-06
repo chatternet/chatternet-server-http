@@ -3,10 +3,10 @@ use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
 
-use crate::chatternet::activities::{Message, MessageType};
+use crate::chatternet::activities::{actor_id_from_did, Message, MessageType};
 use crate::db::{
-    Connection, DbPool, TableActorsAudiences, TableMessages, TableMessagesAudiences,
-    TablesActivityPub,
+    Connection, DbPool, TableActorsAudiences, TableActorsContacts, TableMessages,
+    TableMessagesAudiences, TablesActivityPub,
 };
 use crate::errors::Error;
 
@@ -53,7 +53,7 @@ fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
     let audiences_id = message
         .members
         .as_ref()
-        .and_then(|x| x.get("audiences"))
+        .and_then(|x| x.get("audience"))
         .and_then(|x| x.as_array())
         .map(|x| {
             x.iter()
@@ -69,14 +69,20 @@ fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
 }
 
 async fn handle_follow(message: &Message, connection: &mut Connection) -> Result<()> {
-    let audience_id = message
+    let object_id = message
         .members
         .as_ref()
         .and_then(|x| x.get("object"))
         .and_then(|x| x.as_str());
-    if let Some(audience_id) = audience_id {
+    let actor_id = message.actor.as_str();
+    if let Some(object_id) = object_id {
+        // following a did, use it as a contact for filtering
+        if object_id.starts_with("did:") {
+            connection.put_actor_contact(&actor_id, &object_id).await?;
+        }
+        // following any id, add to its followers collection
         connection
-            .put_actor_audience(&message.actor.id, audience_id)
+            .put_actor_audience(&actor_id, &format!("{}/followers", object_id))
             .await?;
     }
     Ok(())
@@ -87,8 +93,8 @@ async fn handle_did_outbox(
     message: Message,
     db_pool: Arc<DbPool>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let actor_did = &message.actor.id;
-    if actor_did != &did {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    if actor_id != message.actor.as_str() {
         Err(anyhow!("posting to the wrong outbox for the message actor")).map_err(Error)?;
     }
 
@@ -125,7 +131,7 @@ async fn handle_did_outbox(
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|x| Error(anyhow!(x)))?;
     connection
-        .put_message(&message, &message_id, &actor_did)
+        .put_message(&message, &message_id, &actor_id)
         .await
         .map_err(Error)?;
 
@@ -136,13 +142,14 @@ async fn handle_did_inbox(
     did: String,
     db_pool: Arc<DbPool>,
 ) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
     let mut connection = db_pool
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
     let messages = connection
-        .get_inbox_for_did(&did, 32)
+        .get_inbox_for_actor(&actor_id, 32)
         .await
         .map_err(Error)?;
     let messages = messages
@@ -153,17 +160,36 @@ async fn handle_did_inbox(
     Ok(warp::reply::json(&messages))
 }
 
+fn id_from_followers(followers_id: &str) -> Result<String> {
+    let (id, path) = followers_id
+        .split_once("/")
+        .ok_or(anyhow!("followers ID is not a path"))?;
+    if path != "followers" {
+        Err(anyhow!("followers ID is not a followers path"))?;
+    }
+    Ok(id.to_string())
+}
+
 async fn handle_did_following(
     did: String,
     db_pool: Arc<DbPool>,
 ) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
     let mut connection = db_pool
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    let messages = connection.get_actor_audiences(&did).await.map_err(Error)?;
-    Ok(warp::reply::json(&messages))
+    let ids = connection
+        .get_actor_audiences(&actor_id)
+        .await
+        .map_err(Error)?;
+    let ids = ids
+        .iter()
+        .map(|x| id_from_followers(x))
+        .collect::<Result<Vec<String>>>()
+        .map_err(Error)?;
+    Ok(warp::reply::json(&ids))
 }
 
 fn with_resource<T: Clone + Send>(
@@ -178,16 +204,16 @@ pub fn build_api(
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
     let route_did_outbox = warp::post()
-        .and(warp::path!("did" / String / "outbox"))
+        .and(warp::path!("did" / String / "actor" / "outbox"))
         .and(warp::body::json())
         .and(with_resource(db_pool.clone()))
         .and_then(handle_did_outbox);
     let route_did_inbox = warp::get()
-        .and(warp::path!("did" / String / "inbox"))
+        .and(warp::path!("did" / String / "actor" / "inbox"))
         .and(with_resource(db_pool.clone()))
         .and_then(handle_did_inbox);
     let route_did_following = warp::get()
-        .and(warp::path!("did" / String / "following"))
+        .and(warp::path!("did" / String / "actor" / "following"))
         .and(with_resource(db_pool.clone()))
         .and_then(handle_did_following);
     // TODO: did_document, did_actor, did_followers with pagination
@@ -199,27 +225,20 @@ pub fn build_api(
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use serde::Serialize;
     use serde_json::json;
     use ssi::jwk::JWK;
+    use ssi::vc::URI;
     use tokio;
     use warp::{http::StatusCode, test::request};
 
-    use crate::chatternet::activities::{Message, MessageActor, MessageType};
+    use crate::chatternet::activities::{Message, MessageType};
     use crate::chatternet::didkey;
     use crate::db::new_db_pool;
 
     use super::*;
-
-    #[tokio::test]
-    async fn api_handles_version() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
-        const VERSION: &str = env!("CARGO_PKG_VERSION");
-        let response = request().method("GET").path("/version").reply(&api).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(response.body(), VERSION);
-    }
 
     const NO_VEC: Option<&Vec<String>> = None;
 
@@ -243,10 +262,44 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        let actor = MessageActor::new(did, None, None);
-        Message::new(actor, MessageType::Create, Some(members), &jwk)
+        Message::new(&did, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn builds_audiences_id() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let audiences_id = build_audiences_id(
+            &build_message(
+                "message",
+                Some(&["did:example:a", "did:example:b"]),
+                Some(&["did:example:c"]),
+                Some(&["did:example:d"]),
+                &jwk,
+            )
+            .await,
+        )
+        .unwrap();
+        assert_eq!(
+            audiences_id,
+            [
+                "did:example:a",
+                "did:example:b",
+                "did:example:c",
+                "did:example:d"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn api_handles_version() {
+        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(db_pool);
+        const VERSION: &str = env!("CARGO_PKG_VERSION");
+        let response = request().method("GET").path("/version").reply(&api).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body(), VERSION);
     }
 
     #[tokio::test]
@@ -260,7 +313,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/outbox", did))
+            .path(&format!("/did/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -269,7 +322,7 @@ mod test {
         // second post returns status accepted
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/outbox", did))
+            .path(&format!("/did/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -286,7 +339,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/did/did:example:a/outbox")
+            .path("/did/did:example:a/actor/outbox")
             .json(&message)
             .reply(&api)
             .await;
@@ -303,10 +356,10 @@ mod test {
         let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let mut message_2 = message.clone();
-        message_2.id = Some("id:a".to_string());
+        message_2.id = Some(URI::from_str("id:a").unwrap());
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/outbox", did))
+            .path(&format!("/did/{}/actor/outbox", did))
             .json(&message_2)
             .reply(&api)
             .await;
@@ -330,7 +383,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/outbox", did))
+            .path(&format!("/did/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -354,7 +407,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/outbox", did))
+            .path(&format!("/did/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -367,8 +420,7 @@ mod test {
             .as_object()
             .unwrap()
             .to_owned();
-        let actor = MessageActor::new(did, None, None);
-        Message::new(actor, MessageType::Follow, Some(members), &jwk)
+        Message::new(&did, MessageType::Follow, Some(members), &jwk)
             .await
             .unwrap()
     }
@@ -383,7 +435,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/did/{}/outbox", did))
+                .path(&format!("/did/{}/actor/outbox", did))
                 .json(&build_follow("tag:1", &jwk).await)
                 .reply(&api)
                 .await
@@ -393,7 +445,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}/following", did))
+            .path(&format!("/did/{}/actor/following", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -401,112 +453,9 @@ mod test {
         assert_eq!(ids, ["tag:1"]);
     }
 
-    #[tokio::test]
-    async fn api_inbox_returns_messages() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
-
-        let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
-
-        let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did_2 = didkey::did_from_jwk(&jwk_2).unwrap();
-
-        let jwk_3 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did_3 = didkey::did_from_jwk(&jwk_3).unwrap();
-
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_1))
-                .json(&build_message("message 1", Some(&[&did_1]), NO_VEC, NO_VEC, &jwk_1).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_1))
-                .json(&build_message("message 2", Some(&[&did_2]), NO_VEC, NO_VEC, &jwk_1).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_1))
-                .json(&build_message("message 3", NO_VEC, Some(&[&did_2]), NO_VEC, &jwk_1).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_1))
-                .json(&build_message("message 4", NO_VEC, NO_VEC, Some(&[&did_2]), &jwk_1).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-        // not seen because not addressed to did:2 audiences
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_1))
-                .json(&build_message("message 5", NO_VEC, NO_VEC, Some(&[&did_3]), &jwk_1).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-        // not seen because not following actor
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_3))
-                .json(&build_message("message 6", NO_VEC, NO_VEC, Some(&[&did_2]), &jwk_3).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-
-        // did_2 does not yet follow any did, cannot receive any messages
-        let response = request()
-            .method("GET")
-            .path(&format!("/did/{}/inbox", did_2))
-            .reply(&api)
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
-        assert!(messages.is_empty());
-
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/did/{}/outbox", did_2))
-                .json(&build_follow(&did_1, &jwk_2).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-
-        let response = request()
-            .method("GET")
-            .path(&format!("/did/{}/inbox", did_2))
-            .reply(&api)
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
-        let messages: Vec<String> = messages
+    fn messages_from_bytes(bytes: &[u8]) -> Vec<String> {
+        let messages: Vec<Message> = serde_json::from_slice(bytes).unwrap();
+        messages
             .into_iter()
             .map(|x| {
                 x.members
@@ -520,7 +469,114 @@ mod test {
                     .unwrap()
                     .to_string()
             })
-            .collect();
-        assert_eq!(messages, ["message 3", "message 2", "message 1"]);
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn api_inbox_returns_messages() {
+        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(db_pool);
+
+        let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
+
+        let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_2 = didkey::did_from_jwk(&jwk_2).unwrap();
+
+        // let jwk_3 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        // let did_3 = didkey::did_from_jwk(&jwk_3).unwrap();
+
+        // did_1 will see because follows self and this is addressed to self
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/actor/outbox", did_1))
+                .json(
+                    &build_message(
+                        "message 1",
+                        Some(&[format!("{}/actor", did_1)]),
+                        NO_VEC,
+                        NO_VEC,
+                        &jwk_1
+                    )
+                    .await
+                )
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        // did_1 won't see because follows did_2 but not addressed to an audience with did_1
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/actor/outbox", did_1))
+                .json(
+                    &build_message(
+                        "message 2",
+                        Some(&[format!("{}/actor", did_2)]),
+                        NO_VEC,
+                        NO_VEC,
+                        &jwk_1
+                    )
+                    .await
+                )
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        // did_1 will see because follows did_2 and in did_2 follower collection
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/actor/outbox", did_1))
+                .json(
+                    &build_message(
+                        "message 3",
+                        Some(&[format!("{}/actor/followers", did_2)]),
+                        NO_VEC,
+                        NO_VEC,
+                        &jwk_1
+                    )
+                    .await
+                )
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        // did_1 sees only own content addressed to self because not following others
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/actor/inbox", did_1))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(messages_from_bytes(response.body()), ["message 1"]);
+
+        // did_1 follows did_2, gets added to did_2 followers
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/did/{}/actor/outbox", did_1))
+                .json(&build_follow(&format!("{}/actor", did_2), &jwk_1).await)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/actor/inbox", did_1))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            messages_from_bytes(response.body()),
+            ["message 3", "message 1"]
+        );
     }
 }

@@ -230,21 +230,97 @@ impl TableActorsAudiences for Connection {
 }
 
 #[async_trait]
-pub trait TablesActivityPub: TableMessages + TableMessagesAudiences + TableActorsAudiences {
-    async fn get_inbox_for_did(&mut self, did: &str, count: i64) -> Result<Vec<String>>;
+pub trait TableActorsContacts {
+    async fn create_actors_contacts(&mut self) -> Result<()>;
+    async fn put_actor_contact(&mut self, actor_id: &str, contact_id: &str) -> Result<()>;
+    async fn get_actor_contacts(&mut self, actor_id: &str) -> Result<Vec<String>>;
+}
+
+#[async_trait]
+impl TableActorsContacts for Connection {
+    async fn create_actors_contacts(&mut self) -> Result<()> {
+        sqlx::query(
+            "\
+            CREATE TABLE IF NOT EXISTS `ActorsContacts` \
+            (\
+                `actor_id` TEXT NOT NULL, \
+                `contact_id` TEXT NOT NULL\
+            );\
+            ",
+        )
+        .execute(&mut *self)
+        .await?;
+        sqlx::query(
+            "\
+            CREATE INDEX IF NOT EXISTS `actor_id` \
+            ON `ActorsContacts`(`actor_id`);\
+            ",
+        )
+        .execute(&mut *self)
+        .await?;
+        sqlx::query(
+            "\
+            CREATE INDEX IF NOT EXISTS `contact_id` \
+            ON `ActorsContacts`(`contact_id`);\
+            ",
+        )
+        .execute(&mut *self)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn put_actor_contact(&mut self, actor_id: &str, contact_id: &str) -> Result<()> {
+        sqlx::query(
+            "\
+            INSERT INTO `ActorsContacts` \
+            (`actor_id`, `contact_id`) \
+            VALUES($1, $2);\
+            ",
+        )
+        .bind(actor_id)
+        .bind(contact_id)
+        .execute(&mut *self)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_actor_contacts(&mut self, actor_id: &str) -> Result<Vec<String>> {
+        let query = sqlx::query(
+            "\
+            SELECT `contact_id` FROM `ActorsContacts` \
+            WHERE `actor_id` = $1;\
+            ",
+        )
+        .bind(actor_id);
+        let mut contacts_id = Vec::new();
+        let mut rows = query.fetch(&mut *self);
+        while let Some(row) = rows.try_next().await? {
+            let contact_id: &str = row.try_get("contact_id")?;
+            contacts_id.push(contact_id.to_string());
+        }
+        Ok(contacts_id)
+    }
+}
+
+#[async_trait]
+pub trait TablesActivityPub:
+    TableMessages + TableMessagesAudiences + TableActorsAudiences + TableActorsContacts
+{
+    async fn get_inbox_for_actor(&mut self, actor_id: &str, count: i64) -> Result<Vec<String>>;
 }
 
 #[async_trait]
 impl TablesActivityPub for Connection {
-    async fn get_inbox_for_did(&mut self, did: &str, count: i64) -> Result<Vec<String>> {
+    async fn get_inbox_for_actor(&mut self, actor_id: &str, count: i64) -> Result<Vec<String>> {
         let query = sqlx::query(
             "\
             SELECT `message` FROM `Messages` \
             WHERE (\
                 `actor_id` = $1
                 OR `actor_id` IN (\
-                    SELECT `audience_id` FROM `ActorsAudiences` \
-                    WHERE `actor_id` = $1
+                    SELECT `contact_id` FROM `ActorsContacts` \
+                    WHERE `ActorsContacts`.`actor_id` = $1
                 )\
             )\
             AND `message_id` IN (\
@@ -252,14 +328,14 @@ impl TablesActivityPub for Connection {
                 WHERE `MessagesAudiences`.`audience_id` = $1
                 OR `MessagesAudiences`.`audience_id` IN (\
                     SELECT `audience_id` FROM `ActorsAudiences` \
-                    WHERE `actor_id` = $1
+                    WHERE `ActorsAudiences`.`actor_id` = $1
                 )\
             ) \
             ORDER BY `idx` DESC
             LIMIT $2;\
             ",
         )
-        .bind(did)
+        .bind(actor_id)
         .bind(count);
         let mut messages = Vec::new();
         let mut rows = query.fetch(&mut *self);
@@ -283,6 +359,7 @@ pub async fn new_db_pool(url: &str) -> Result<DbPool> {
     connection.create_messages().await?;
     connection.create_messages_audiences().await?;
     connection.create_actors_audiences().await?;
+    connection.create_actors_contacts().await?;
     Ok(db_pool)
 }
 
@@ -302,11 +379,11 @@ mod test {
         let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
         let mut connection = db_pool.acquire().await.unwrap();
         connection
-            .put_message("message", "id:1", "did:1")
+            .put_message("message", "id:1", "did:1/actor")
             .await
             .unwrap();
         connection
-            .put_message("message", "id:2", "did:1")
+            .put_message("message", "id:2", "did:1/actor")
             .await
             .unwrap();
         assert!(connection.has_message("id:1").await.unwrap());
@@ -319,24 +396,50 @@ mod test {
         let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
         let mut connection = db_pool.acquire().await.unwrap();
         connection
-            .put_actor_audience("did:1", "did:2")
+            .put_actor_audience("did:1/actor", "did:2/actor/followers")
             .await
             .unwrap();
         connection
-            .put_actor_audience("did:1", "tag:1")
+            .put_actor_audience("did:1/actor", "tag:1/followers")
             .await
             .unwrap();
         connection
-            .put_actor_audience("did:2", "tag:1")
+            .put_actor_audience("did:2/actor", "tag:1/followers")
             .await
             .unwrap();
         assert_eq!(
-            connection.get_actor_audiences("did:1").await.unwrap(),
-            ["did:2", "tag:1"]
+            connection.get_actor_audiences("did:1/actor").await.unwrap(),
+            ["did:2/actor/followers", "tag:1/followers"]
         );
         assert_eq!(
-            connection.get_actor_audiences("did:2").await.unwrap(),
-            ["tag:1"]
+            connection.get_actor_audiences("did:2/actor").await.unwrap(),
+            ["tag:1/followers"]
+        );
+    }
+
+    #[tokio::test]
+    async fn puts_and_gets_actor_contacts() {
+        let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
+        let mut connection = db_pool.acquire().await.unwrap();
+        connection
+            .put_actor_contact("did:1/actor", "did:2/actor")
+            .await
+            .unwrap();
+        connection
+            .put_actor_contact("did:2/actor", "did:1/actor")
+            .await
+            .unwrap();
+        connection
+            .put_actor_contact("did:2/actor", "did:3/actor")
+            .await
+            .unwrap();
+        assert_eq!(
+            connection.get_actor_contacts("did:1/actor").await.unwrap(),
+            ["did:2/actor"]
+        );
+        assert_eq!(
+            connection.get_actor_contacts("did:2/actor").await.unwrap(),
+            ["did:1/actor", "did:3/actor"]
         );
     }
 
@@ -345,94 +448,119 @@ mod test {
         let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
         let mut connection = db_pool.acquire().await.unwrap();
         connection
-            .put_message_audience("id:1", "did:2")
+            .put_message_audience("id:1", "did:2/actor/followers")
             .await
             .unwrap();
         connection
-            .put_message_audience("id:1", "tag:1")
+            .put_message_audience("id:1", "tag:1/followers")
             .await
             .unwrap();
         connection
-            .put_message_audience("id:2", "tag:1")
+            .put_message_audience("id:2", "tag:1/followers")
             .await
             .unwrap();
         assert_eq!(
             connection.get_message_audiences("id:1").await.unwrap(),
-            ["did:2", "tag:1"]
+            ["did:2/actor/followers", "tag:1/followers"]
         );
         assert_eq!(
             connection.get_message_audiences("id:2").await.unwrap(),
-            ["tag:1"]
+            ["tag:1/followers"]
         );
     }
 
     #[tokio::test]
-    async fn db_gets_inbox_for_did() {
+    async fn db_gets_inbox_for_actor() {
         let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
         let mut connection = db_pool.acquire().await.unwrap();
 
         connection
-            .put_message("message 1", "id:1", "did:1")
+            .put_message("message 1", "id:1", "did:1/actor")
             .await
             .unwrap();
         connection
-            .put_message_audience("id:1", "did:1")
+            .put_message_audience("id:1", "did:1/actor")
             .await
             .unwrap();
         connection
-            .put_message("message 2", "id:2", "did:1")
+            .put_message("message 2", "id:2", "did:1/actor")
             .await
             .unwrap();
         connection
-            .put_message_audience("id:2", "tag:1")
+            .put_message_audience("id:2", "tag:1/followers")
             .await
             .unwrap();
         connection
-            .put_message("message 3", "id:3", "did:2")
+            .put_message("message 3", "id:3", "did:2/actor")
             .await
             .unwrap();
         connection
-            .put_message_audience("id:3", "tag:1")
+            .put_message_audience("id:3", "tag:1/followers")
             .await
             .unwrap();
         connection
-            .put_message("message 4", "id:4", "did:2")
+            .put_message("message 4", "id:4", "did:2/actor")
             .await
             .unwrap();
         connection
-            .put_message_audience("id:4", "tag:2")
+            .put_message_audience("id:4", "tag:2/followers")
             .await
             .unwrap();
 
         // did:1 gets messages addressed to self
         assert_eq!(
-            connection.get_inbox_for_did("did:1", 1).await.unwrap(),
+            connection
+                .get_inbox_for_actor("did:1/actor", 1)
+                .await
+                .unwrap(),
             ["message 1"]
         );
 
         // did:1 follows tag:1
         connection
-            .put_actor_audience("did:1", "tag:1")
+            .put_actor_audience("did:1/actor", "tag:1/followers")
             .await
             .unwrap();
         assert_eq!(
-            connection.get_inbox_for_did("did:1", 1).await.unwrap(),
+            connection
+                .get_inbox_for_actor("did:1/actor", 1)
+                .await
+                .unwrap(),
             ["message 2"]
         );
         // can get more messages
         assert_eq!(
-            connection.get_inbox_for_did("did:1", 3).await.unwrap(),
+            connection
+                .get_inbox_for_actor("did:1/actor", 3)
+                .await
+                .unwrap(),
             ["message 2", "message 1"]
         );
 
         // did:1 follows did:2
         connection
-            .put_actor_audience("did:1", "did:2")
+            .put_actor_audience("did:1/actor", "did:2/actor/followers")
             .await
             .unwrap();
-        // gets the latest message by did:2 about tag:1
+        // but not a contact of did:2 so can't get messages
         assert_eq!(
-            connection.get_inbox_for_did("did:1", 3).await.unwrap(),
+            connection
+                .get_inbox_for_actor("did:1/actor", 1)
+                .await
+                .unwrap(),
+            ["message 2"]
+        );
+
+        // did:1 adds did:2 as a contact
+        connection
+            .put_actor_contact("did:1/actor", "did:2/actor")
+            .await
+            .unwrap();
+        assert_eq!(
+            connection
+                .get_inbox_for_actor("did:1/actor", 3)
+                .await
+                .unwrap(),
             ["message 3", "message 2", "message 1"]
         );
     }
