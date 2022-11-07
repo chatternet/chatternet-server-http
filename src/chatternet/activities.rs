@@ -68,105 +68,8 @@ pub fn did_from_actor_id(actor_id: &str) -> Result<String> {
     Ok(did.to_string())
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Actor {
-    #[serde(rename = "@context")]
-    pub context: Vec<String>,
-    pub id: URI,
-    pub inbox: URI,
-    pub outbox: URI,
-    pub following: URI,
-    pub followers: URI,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(flatten)]
-    pub members: Option<Map<String, Value>>,
-}
-
-impl Actor {
-    pub fn new(
-        did: String,
-        name: Option<String>,
-        members: Option<Map<String, Value>>,
-    ) -> Result<Self> {
-        let actor_id = actor_id_from_did(&did)?;
-        let id = URI::from_str(&actor_id)?;
-        let inbox = URI::try_from(format!("{}/inbox", &actor_id))?;
-        let outbox = URI::try_from(format!("{}/outbox", &actor_id))?;
-        let following = URI::try_from(format!("{}/following", &actor_id))?;
-        let followers = URI::try_from(format!("{}/followers", &actor_id))?;
-        Ok(Actor {
-            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
-            id,
-            inbox,
-            outbox,
-            following,
-            followers,
-            name,
-            members,
-        })
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Object {
-    #[serde(rename = "@context")]
-    pub context: Vec<String>,
-    pub id: URI,
-    #[serde(rename = "type")]
-    pub object_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(flatten)]
-    pub members: Option<Map<String, Value>>,
-}
-
-impl Object {
-    pub fn new(
-        object_id: String,
-        object_type: String,
-        members: Option<Map<String, Value>>,
-    ) -> Result<Self> {
-        let id = URI::from_str(&object_id)?;
-        Ok(Object {
-            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
-            id,
-            object_type,
-            members,
-        })
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum MessageType {
-    Create,
-    Follow,
-    Add,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct Message {
-    #[serde(rename = "@context")]
-    pub context: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<URI>,
-    #[serde(rename = "type")]
-    pub message_type: MessageType,
-    pub actor: URI,
-    pub object: URI,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(flatten)]
-    pub members: Option<Map<String, Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "https://w3id.org/security#proof")]
-    pub proof: Option<Proof>,
-}
-
 async fn build_proof(
-    message: &(impl LinkedDataDocument + Sync),
+    document: &(impl LinkedDataDocument + Sync),
     did: &str,
     jwk: &JWK,
 ) -> Result<Proof> {
@@ -182,7 +85,7 @@ async fn build_proof(
     options.type_ = Some("Ed25519Signature2020".to_string());
     options.verification_method = Some(verification_method);
     Ok(LinkedDataProofs::sign(
-        message,
+        document,
         &options,
         &DIDKey,
         &mut new_context_loader(),
@@ -192,11 +95,260 @@ async fn build_proof(
     .await?)
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ActorType {
+    Application,
+    Group,
+    Organization,
+    Person,
+    Service,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Actor {
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+    pub id: URI,
+    #[serde(rename = "type")]
+    pub actor_type: ActorType,
+    pub inbox: URI,
+    pub outbox: URI,
+    pub following: URI,
+    pub followers: URI,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(flatten)]
+    pub members: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "https://w3id.org/security#proof")]
+    pub proof: Option<Proof>,
+}
+
+impl Actor {
+    pub async fn new(
+        did: String,
+        actor_type: ActorType,
+        members: Option<Map<String, Value>>,
+        jwk: Option<&JWK>,
+    ) -> Result<Self> {
+        if members.is_some() && jwk.is_none() {
+            Err(anyhow!("added members without a JWK signing key"))?;
+        }
+        let actor_id = actor_id_from_did(&did)?;
+        let id = URI::from_str(&actor_id)?;
+        let inbox = URI::try_from(format!("{}/inbox", &actor_id))?;
+        let outbox = URI::try_from(format!("{}/outbox", &actor_id))?;
+        let following = URI::try_from(format!("{}/following", &actor_id))?;
+        let followers = URI::try_from(format!("{}/followers", &actor_id))?;
+        let mut actor = Actor {
+            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            id,
+            actor_type,
+            inbox,
+            outbox,
+            following,
+            followers,
+            members,
+            proof: None,
+        };
+        if let Some(jwk) = jwk {
+            actor.proof = Some(build_proof(&actor, &did, jwk).await?);
+        }
+        Ok(actor)
+    }
+
+    pub async fn verify(&self) -> Result<()> {
+        let actor_id = self.id.as_str();
+        let did = did_from_actor_id(actor_id)?;
+        if self.inbox.as_str() != format!("{}/inbox", &actor_id) {
+            Err(anyhow!("actor inbox URI is incorrect"))?;
+        }
+        if self.outbox.as_str() != format!("{}/outbox", &actor_id) {
+            Err(anyhow!("actor outbox URI is incorrect"))?;
+        }
+        if self.following.as_str() != format!("{}/following", &actor_id) {
+            Err(anyhow!("actor following URI is incorrect"))?;
+        }
+        if self.followers.as_str() != format!("{}/followers", &actor_id) {
+            Err(anyhow!("actor followers URI is incorrect"))?;
+        }
+        if self.members.is_some() && self.proof.is_none() {
+            Err(anyhow!("actor has members with no proof"))?;
+        }
+        if self.proof.is_none() {
+            return Ok(());
+        }
+
+        let mut actor = self.clone();
+        let proof_purpose = actor
+            .get_default_proof_purpose()
+            .ok_or(anyhow!("actor has no proof purpose"))?;
+        let proof = actor
+            .proof
+            .take()
+            .ok_or(anyhow!("actor does not contain a proof"))?;
+        let verification_methods =
+            did_resolve::get_verification_methods(&did, proof_purpose, &DIDKey).await?;
+        match &proof.verification_method {
+            Some(verification_method) => {
+                if !verification_methods.contains_key(verification_method) {
+                    return Err(anyhow!("actor proof cannot be verified by actor"));
+                }
+            }
+            None => {
+                return Err(anyhow!("actor proof cannot be verified"));
+            }
+        };
+        LinkedDataProofs::verify(&proof, &actor, &DIDKey, &mut new_context_loader()).await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LinkedDataDocument for Actor {
+    fn get_contexts(&self) -> Result<Option<String>, LdpError> {
+        Ok(serde_json::to_string(&self.context).ok())
+    }
+
+    async fn to_dataset_for_signing(
+        &self,
+        parent: Option<&(dyn LinkedDataDocument + Sync)>,
+        context_loader: &mut ContextLoader,
+    ) -> Result<DataSet, LdpError> {
+        let json = serde_json::to_string(&self)?;
+        let more_contexts = match parent {
+            Some(parent) => parent.get_contexts()?,
+            None => None,
+        };
+        Ok(json_to_dataset(&json, more_contexts.as_ref(), false, None, context_loader).await?)
+    }
+
+    fn to_value(&self) -> Result<Value, LdpError> {
+        Ok(serde_json::to_value(&self)?)
+    }
+
+    fn get_default_proof_purpose(&self) -> Option<ProofPurpose> {
+        Some(ProofPurpose::AssertionMethod)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ObjectType {
+    Article,
+    Audio,
+    Document,
+    Event,
+    Image,
+    Note,
+    Page,
+    Place,
+    Profile,
+    Relationship,
+    Tombstone,
+    Video,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Object {
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<URI>,
+    #[serde(rename = "type")]
+    pub object_type: ObjectType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(flatten)]
+    pub members: Option<Map<String, Value>>,
+}
+
+impl Object {
+    pub async fn new(object_type: ObjectType, members: Option<Map<String, Value>>) -> Result<Self> {
+        let mut object = Object {
+            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            id: None,
+            object_type,
+            members,
+        };
+        object.id = Some(
+            URI::try_from(cid_to_urn(
+                cid_from_json(&object, &mut new_context_loader(), None).await?,
+            ))
+            .unwrap(),
+        );
+        Ok(object)
+    }
+
+    pub async fn verify(&self) -> Result<String> {
+        let mut object = self.clone();
+        let id = object
+            .id
+            .take()
+            .ok_or(anyhow!("object does not contain an ID"))?;
+        if id.as_str() != cid_to_urn(cid_from_json(&object, &mut new_context_loader(), None).await?)
+        {
+            return Err(anyhow!("message ID does not match its contents"));
+        }
+        Ok(id.to_string())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum ActivityType {
+    Accept,
+    Add,
+    Announce,
+    Arrive,
+    Block,
+    Create,
+    Delete,
+    Dislike,
+    Flag,
+    Follow,
+    Ignore,
+    Invite,
+    Join,
+    Leave,
+    Like,
+    Listen,
+    Move,
+    Offer,
+    Question,
+    Reject,
+    Read,
+    Remove,
+    TentativeReject,
+    TentativeAccept,
+    Travel,
+    Undo,
+    Update,
+    View,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Message {
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<URI>,
+    #[serde(rename = "type")]
+    pub message_type: ActivityType,
+    pub actor: URI,
+    pub object: URI,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(flatten)]
+    pub members: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "https://w3id.org/security#proof")]
+    pub proof: Option<Proof>,
+}
+
 impl Message {
     pub async fn new(
         actor_did: &str,
         object_id: &str,
-        message_type: MessageType,
+        activity_type: ActivityType,
         members: Option<Map<String, Value>>,
         jwk: &JWK,
     ) -> Result<Self> {
@@ -207,7 +359,7 @@ impl Message {
         let mut message = Message {
             context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
             id: None,
-            message_type: message_type,
+            message_type: activity_type,
             actor: actor_id,
             object: object_id,
             members,
@@ -250,27 +402,14 @@ impl Message {
             .id
             .take()
             .ok_or(anyhow!("message does not contain an ID"))?;
-        if id
-            != URI::try_from(cid_to_urn(
-                cid_from_json(&message, &mut new_context_loader(), None).await?,
-            ))
-            .unwrap()
+        if id.as_str()
+            != cid_to_urn(cid_from_json(&message, &mut new_context_loader(), None).await?)
         {
             return Err(anyhow!("message ID does not match its contents"));
         }
         message.id = Some(id.clone());
         message.proof = Some(proof);
         Ok(id.to_string())
-    }
-
-    pub fn set(&mut self, properties: &Value) -> Result<()> {
-        let map: Map<String, Value> = properties
-            .as_object()
-            .ok_or(anyhow!("properties cannot be inserted into message"))?
-            .to_owned()
-            .into();
-        self.members = Some(map);
-        Ok(())
     }
 }
 
@@ -349,10 +488,90 @@ mod test {
     }
 
     #[tokio::test]
+    async fn builds_actor_no_members_verifies() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let actor = Actor::new(did, ActorType::Person, None, None)
+            .await
+            .unwrap();
+        actor.verify().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn builds_actor_no_members_doesnt_verify_invalid_uris() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let actor = Actor::new(did, ActorType::Person, None, None)
+            .await
+            .unwrap();
+        let mut actor_invalid = actor.clone();
+        actor_invalid.id = URI::from_str("a:b").unwrap();
+        actor_invalid.verify().await.unwrap_err();
+        let mut actor_invalid = actor.clone();
+        actor_invalid.inbox = URI::from_str("a:b").unwrap();
+        actor_invalid.verify().await.unwrap_err();
+        let mut actor_invalid = actor.clone();
+        actor_invalid.outbox = URI::from_str("a:b").unwrap();
+        actor_invalid.verify().await.unwrap_err();
+        let mut actor_invalid = actor.clone();
+        actor_invalid.following = URI::from_str("a:b").unwrap();
+        actor_invalid.verify().await.unwrap_err();
+        let mut actor_invalid = actor.clone();
+        actor_invalid.followers = URI::from_str("a:b").unwrap();
+        actor_invalid.verify().await.unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn builds_actor_with_members_verifies() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
+        let actor = Actor::new(did, ActorType::Person, Some(members), Some(&jwk))
+            .await
+            .unwrap();
+        actor.verify().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn builds_actor_no_members_doesnt_verify_modified() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
+        let actor = Actor::new(did, ActorType::Person, Some(members), Some(&jwk))
+            .await
+            .unwrap();
+        let mut actor_invalid = actor.clone();
+        actor_invalid
+            .members
+            .as_mut()
+            .and_then(|x| x.insert("name".to_string(), serde_json::to_value("abcd").unwrap()));
+        actor_invalid.verify().await.unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn builds_object_verifies() {
+        let members = json!({"content": "abc"}).as_object().unwrap().to_owned();
+        let object = Object::new(ObjectType::Note, Some(members)).await.unwrap();
+        object.verify().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn builds_object_doesnt_verify_invalid_id() {
+        let members = json!({"content": "abc"}).as_object().unwrap().to_owned();
+        let object = Object::new(ObjectType::Note, Some(members)).await.unwrap();
+        let mut object_invalid = object.clone();
+        object_invalid
+            .members
+            .as_mut()
+            .and_then(|x| x.insert("content".to_string(), serde_json::to_value("abcd").unwrap()));
+        object_invalid.verify().await.unwrap_err();
+    }
+
+    #[tokio::test]
     async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
+        let message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
             .await
             .unwrap();
         message.verify().await.unwrap();
@@ -362,7 +581,7 @@ mod test {
     async fn builds_message_wrong_actor_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
             .await
             .unwrap();
         let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
@@ -375,7 +594,7 @@ mod test {
     async fn builds_message_wrong_id_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
             .await
             .unwrap();
         message.id = Some(URI::from_str("a:b").unwrap());
@@ -387,7 +606,7 @@ mod test {
     async fn builds_message_modified_content_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
             .await
             .unwrap();
         message.object = URI::from_str("id:b").unwrap();
@@ -403,7 +622,7 @@ mod test {
     async fn builds_message_aribtrary_data_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
             .await
             .unwrap();
         message.members = Some(

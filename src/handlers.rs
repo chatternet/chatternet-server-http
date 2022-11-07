@@ -6,7 +6,7 @@ use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
 
-use crate::chatternet::activities::{actor_id_from_did, Message, MessageType, Object};
+use crate::chatternet::activities::{actor_id_from_did, ActivityType, Message, Object};
 use crate::db::{
     get_actor_audiences, get_inbox_for_actor, get_object, has_message, has_object,
     put_actor_audience, put_actor_contact, put_message, put_message_audience, put_or_update_object,
@@ -118,7 +118,7 @@ async fn handle_did_outbox(
     // run type-dependent side effects
     match message.message_type {
         // activity expresses a follow relationship
-        MessageType::Follow => handle_follow(&message, &mut *connection)
+        ActivityType::Follow => handle_follow(&message, &mut *connection)
             .await
             .map_err(Error)?,
         _ => (),
@@ -247,7 +247,13 @@ async fn handle_object_post(
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    if object_id != object.id.as_str() {
+    if object_id.is_empty()
+        || object
+            .id
+            .as_ref()
+            .map(|x| x.as_str() != object_id)
+            .unwrap_or(true)
+    {
         Err(Error(anyhow!("posted object has wrong ID")))?;
     }
     if !has_object(&mut connection, &object_id)
@@ -319,7 +325,7 @@ mod test {
     use tokio;
     use warp::{http::StatusCode, test::request};
 
-    use crate::chatternet::activities::{Message, MessageType};
+    use crate::chatternet::activities::{ActivityType, Message, ObjectType};
     use crate::chatternet::didkey;
     use crate::db::new_pool;
 
@@ -343,7 +349,7 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        Message::new(&did, object_id, MessageType::Create, Some(members), &jwk)
+        Message::new(&did, object_id, ActivityType::Create, Some(members), &jwk)
             .await
             .unwrap()
     }
@@ -497,7 +503,7 @@ mod test {
 
     async fn build_follow(follow_id: &str, jwk: &JWK) -> Message {
         let did = didkey::did_from_jwk(jwk).unwrap();
-        Message::new(&did, follow_id, MessageType::Follow, None, &jwk)
+        Message::new(&did, follow_id, ActivityType::Follow, None, &jwk)
             .await
             .unwrap()
     }
@@ -679,7 +685,8 @@ mod test {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
 
-        let object_id = "id:1";
+        let object = Object::new(ObjectType::Note, None).await.unwrap();
+        let object_id = object.id.as_ref().unwrap().as_str();
         let message = build_message(object_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = request()
@@ -696,10 +703,9 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let object: Option<Object> = serde_json::from_slice(response.body()).unwrap();
-        assert!(object.is_none());
+        let object_back: Option<Object> = serde_json::from_slice(response.body()).unwrap();
+        assert!(object_back.is_none());
 
-        let object = Object::new(object_id.to_string(), "Note".to_string(), None).unwrap();
         let response = request()
             .method("POST")
             .path(&format!("/object/{}", object_id))
@@ -727,7 +733,8 @@ mod test {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
 
-        let object_id = "id:1";
+        let object = Object::new(ObjectType::Note, None).await.unwrap();
+        let object_id = object.id.as_ref().unwrap().as_str();
         let message = build_message(object_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = request()
@@ -744,10 +751,9 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let object: Option<Object> = serde_json::from_slice(response.body()).unwrap();
-        assert!(object.is_none());
+        let object_back: Option<Object> = serde_json::from_slice(response.body()).unwrap();
+        assert!(object_back.is_none());
 
-        let object = Object::new(object_id.to_string(), "Note".to_string(), None).unwrap();
         let response = request()
             .method("POST")
             .path("/object/id:wrong")
@@ -773,11 +779,12 @@ mod test {
     async fn api_object_wont_post_unknown() {
         let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
         let api = build_api(pool);
-        let object_id = "id:1";
+        let object = Object::new(ObjectType::Note, None).await.unwrap();
+        let object_id = object.id.as_ref().unwrap().as_str();
         let response = request()
             .method("POST")
             .path(&format!("/object/{}", object_id))
-            .json(&Object::new(object_id.to_string(), "Note".to_string(), None).unwrap())
+            .json(&object)
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
