@@ -417,9 +417,16 @@ mod test {
         .as_object()
         .unwrap()
         .to_owned();
-        Message::new(&did, object_id, ActivityType::Create, Some(members), &jwk)
-            .await
-            .unwrap()
+        Message::new(
+            &did,
+            object_id,
+            ActivityType::Create,
+            None,
+            Some(members),
+            &jwk,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -571,7 +578,7 @@ mod test {
 
     async fn build_follow(follow_id: &str, jwk: &JWK) -> Message {
         let did = didkey::did_from_jwk(jwk).unwrap();
-        Message::new(&did, follow_id, ActivityType::Follow, None, &jwk)
+        Message::new(&did, follow_id, ActivityType::Follow, None, None, &jwk)
             .await
             .unwrap()
     }

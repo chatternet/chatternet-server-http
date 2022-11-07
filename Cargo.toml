@@ -9,6 +9,7 @@ edition = "2021"
 activitystreams-kinds = "0.2.1"
 anyhow = "1.0.66"
 async-trait = "0.1.58"
+chrono = "0.4.22"
 cid = "0.8.6"
 clap = { version = "4.0.18", features = ["derive"] }
 did-method-key = { path = "libs/ssi/did-key" }

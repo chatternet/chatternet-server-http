@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use chrono::prelude::{DateTime, Utc};
 use cid::multihash::{Code, MultihashDigest};
 use cid::Cid;
 use did_method_key::DIDKey;
@@ -10,7 +11,7 @@ use serde_json::{self, Map, Value};
 use ssi::did::VerificationRelationship as ProofPurpose;
 use ssi::jsonld::{json_to_dataset, ContextLoader};
 use ssi::jwk::JWK;
-use ssi::ldp::{Error as LdpError, Proof};
+use ssi::ldp::{now_ms, Error as LdpError, Proof};
 use ssi::ldp::{LinkedDataDocument, LinkedDataProofs};
 use ssi::rdf::DataSet;
 use ssi::vc::{LinkedDataProofOptions, URI};
@@ -336,6 +337,7 @@ pub struct Message {
     pub message_type: ActivityType,
     pub actor: URI,
     pub object: URI,
+    pub published: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
@@ -349,11 +351,13 @@ impl Message {
         actor_did: &str,
         object_id: &str,
         activity_type: ActivityType,
+        published: Option<DateTime<Utc>>,
         members: Option<Map<String, Value>>,
         jwk: &JWK,
     ) -> Result<Self> {
         let actor_id = URI::try_from(actor_id_from_did(actor_did)?)?;
         let object_id = URI::from_str(object_id)?;
+        let published = published.unwrap_or_else(now_ms);
         // build an ID which is isomorphic to the subject object such that new
         // messages cannot override old ones
         let mut message = Message {
@@ -362,6 +366,7 @@ impl Message {
             message_type: activity_type,
             actor: actor_id,
             object: object_id,
+            published,
             members,
             proof: None,
         };
@@ -571,7 +576,7 @@ mod test {
     async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
+        let message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.verify().await.unwrap();
@@ -581,7 +586,7 @@ mod test {
     async fn builds_message_wrong_actor_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
@@ -594,7 +599,7 @@ mod test {
     async fn builds_message_wrong_id_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.id = Some(URI::from_str("a:b").unwrap());
@@ -606,7 +611,7 @@ mod test {
     async fn builds_message_modified_content_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.object = URI::from_str("id:b").unwrap();
@@ -622,7 +627,7 @@ mod test {
     async fn builds_message_aribtrary_data_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, &jwk)
+        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.members = Some(

@@ -480,6 +480,7 @@ dependencies = [
  "activitystreams-kinds",
  "anyhow",
  "async-trait",
+ "chrono",
  "cid",
  "clap",
  "did-method-key",
