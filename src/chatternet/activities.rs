@@ -127,6 +127,7 @@ pub struct Message {
     #[serde(rename = "type")]
     pub message_type: MessageType,
     pub actor: URI,
+    pub object: URI,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
@@ -165,11 +166,13 @@ async fn build_proof(
 impl Message {
     pub async fn new(
         actor_did: &str,
+        object_id: &str,
         message_type: MessageType,
         members: Option<Map<String, Value>>,
         jwk: &JWK,
     ) -> Result<Self> {
         let actor_id = URI::try_from(actor_id_from_did(actor_did)?)?;
+        let object_id = URI::from_str(object_id)?;
         // build an ID which is isomorphic to the subject object such that new
         // messages cannot override old ones
         let mut message = Message {
@@ -177,6 +180,7 @@ impl Message {
             id: None,
             message_type: message_type,
             actor: actor_id,
+            object: object_id,
             members,
             proof: None,
         };
@@ -319,16 +323,7 @@ mod test {
     async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let members = json!({
-            "object": {
-                "type": "Note",
-                "content": "abc"
-            }
-        })
-        .as_object()
-        .unwrap()
-        .to_owned();
-        let message = Message::new(&did, MessageType::Create, Some(members), &jwk)
+        let message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
             .await
             .unwrap();
         message.verify().await.unwrap();
@@ -338,16 +333,7 @@ mod test {
     async fn builds_message_wrong_actor_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let members = json!({
-            "object": {
-                "type": "Note",
-                "content": "abc"
-            }
-        })
-        .as_object()
-        .unwrap()
-        .to_owned();
-        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
             .await
             .unwrap();
         let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
@@ -360,16 +346,7 @@ mod test {
     async fn builds_message_wrong_id_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let members = json!({
-            "object": {
-                "type": "Note",
-                "content": "abc"
-            }
-        })
-        .as_object()
-        .unwrap()
-        .to_owned();
-        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
             .await
             .unwrap();
         message.id = Some(URI::from_str("a:b").unwrap());
@@ -381,28 +358,10 @@ mod test {
     async fn builds_message_modified_content_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let members = json!({
-            "object": {
-                "type": "Note",
-                "content": "abc"
-            }
-        })
-        .as_object()
-        .unwrap()
-        .to_owned();
-        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
             .await
             .unwrap();
-        message
-            .members
-            .as_mut()
-            .unwrap()
-            .get_mut("object")
-            .unwrap()
-            .as_object_mut()
-            .unwrap()
-            .insert("content".to_string(), serde_json::to_value("abcd").unwrap())
-            .unwrap();
+        message.object = URI::from_str("id:b").unwrap();
         message.verify().await.unwrap_err();
     }
 
@@ -410,27 +369,19 @@ mod test {
     // https://github.com/timothee-haudebourg/json-ld/pull/13
     // https://github.com/timothee-haudebourg/json-ld/pull/14
     // https://github.com/timothee-haudebourg/json-ld/issues/39
-    // https://releases.rs/docs/unreleased/1.65.0/
     // #[tokio::test]
     #[allow(dead_code)]
     async fn builds_message_aribtrary_data_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let members = json!({
-            "object": {
-                "type": "Note",
-                "content": "abc"
-            }
-        })
-        .as_object()
-        .unwrap()
-        .to_owned();
-        let mut message = Message::new(&did, MessageType::Create, Some(members), &jwk)
+        let mut message = Message::new(&did, "id:a", MessageType::Create, None, &jwk)
             .await
             .unwrap();
-        message.members.as_mut().unwrap().insert(
-            "does not exit".to_string(),
-            serde_json::to_value("abc").unwrap(),
+        message.members = Some(
+            json!({"does not exist": "abc"})
+                .as_object()
+                .unwrap()
+                .to_owned(),
         );
         message.verify().await.unwrap_err();
     }

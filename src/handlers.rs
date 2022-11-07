@@ -71,22 +71,16 @@ fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
 }
 
 async fn handle_follow(message: &Message, connection: &mut Connection) -> Result<()> {
-    let object_id = message
-        .members
-        .as_ref()
-        .and_then(|x| x.get("object"))
-        .and_then(|x| x.as_str());
     let actor_id = message.actor.as_str();
-    if let Some(object_id) = object_id {
-        // following a did, use it as a contact for filtering
-        if object_id.starts_with("did:") {
-            connection.put_actor_contact(&actor_id, &object_id).await?;
-        }
-        // following any id, add to its followers collection
-        connection
-            .put_actor_audience(&actor_id, &format!("{}/followers", object_id))
-            .await?;
+    let object_id = message.object.as_str();
+    // following a did, use it as a contact for filtering
+    if object_id.starts_with("did:") {
+        connection.put_actor_contact(&actor_id, &object_id).await?;
     }
+    // following any id, add to its followers collection
+    connection
+        .put_actor_audience(&actor_id, &format!("{}/followers", object_id))
+        .await?;
     Ok(())
 }
 
@@ -258,7 +252,7 @@ mod test {
     const NO_VEC: Option<&Vec<String>> = None;
 
     async fn build_message(
-        content: &str,
+        object_id: &str,
         to: Option<&impl Serialize>,
         cc: Option<&impl Serialize>,
         audience: Option<&impl Serialize>,
@@ -269,15 +263,11 @@ mod test {
             "to": to,
             "cc": cc,
             "audience": audience,
-            "object": {
-                "type": "Note",
-                "content": content
-            }
         })
         .as_object()
         .unwrap()
         .to_owned();
-        Message::new(&did, MessageType::Create, Some(members), &jwk)
+        Message::new(&did, object_id, MessageType::Create, Some(members), &jwk)
             .await
             .unwrap()
     }
@@ -287,7 +277,7 @@ mod test {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let audiences_id = build_audiences_id(
             &build_message(
-                "message",
+                "id:1",
                 Some(&["did:example:a", "did:example:b"]),
                 Some(&["did:example:c"]),
                 Some(&["did:example:d"]),
@@ -324,7 +314,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = request()
             .method("POST")
@@ -350,7 +340,7 @@ mod test {
         let api = build_api(db_pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = request()
             .method("POST")
@@ -368,7 +358,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let mut message_2 = message.clone();
         message_2.id = Some(URI::from_str("id:a").unwrap());
@@ -388,7 +378,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let mut message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
         message.members.as_mut().and_then(|x| {
             x.insert(
                 "bcc".to_string(),
@@ -412,7 +402,7 @@ mod test {
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = build_message("message", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let mut message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
         message.members.as_mut().and_then(|x| {
             x.insert(
                 "bto".to_string(),
@@ -431,11 +421,7 @@ mod test {
 
     async fn build_follow(follow_id: &str, jwk: &JWK) -> Message {
         let did = didkey::did_from_jwk(jwk).unwrap();
-        let members = json!({ "object": follow_id })
-            .as_object()
-            .unwrap()
-            .to_owned();
-        Message::new(&did, MessageType::Follow, Some(members), &jwk)
+        Message::new(&did, follow_id, MessageType::Follow, None, &jwk)
             .await
             .unwrap()
     }
@@ -468,25 +454,6 @@ mod test {
         assert_eq!(ids, ["tag:1"]);
     }
 
-    fn messages_from_bytes(bytes: &[u8]) -> Vec<String> {
-        let messages: Vec<Message> = serde_json::from_slice(bytes).unwrap();
-        messages
-            .into_iter()
-            .map(|x| {
-                x.members
-                    .as_ref()
-                    .unwrap()
-                    .get("object")
-                    .unwrap()
-                    .get("content")
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_string()
-            })
-            .collect()
-    }
-
     #[tokio::test]
     async fn api_inbox_returns_messages() {
         let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
@@ -508,7 +475,7 @@ mod test {
                 .path(&format!("/did/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
-                        "message 1",
+                        "id:1",
                         Some(&[format!("{}/actor", did_1)]),
                         NO_VEC,
                         NO_VEC,
@@ -528,7 +495,7 @@ mod test {
                 .path(&format!("/did/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
-                        "message 2",
+                        "id:2",
                         Some(&[format!("{}/actor", did_2)]),
                         NO_VEC,
                         NO_VEC,
@@ -548,7 +515,7 @@ mod test {
                 .path(&format!("/did/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
-                        "message 3",
+                        "id:3",
                         Some(&[format!("{}/actor/followers", did_2)]),
                         NO_VEC,
                         NO_VEC,
@@ -569,7 +536,14 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(messages_from_bytes(response.body()), ["message 1"]);
+        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(
+            messages
+                .iter()
+                .map(|x| x.object.as_str())
+                .collect::<Vec<&str>>(),
+            ["id:1"]
+        );
 
         // did_1 follows did_2, gets added to did_2 followers
         assert_eq!(
@@ -589,9 +563,13 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
+        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
-            messages_from_bytes(response.body()),
-            ["message 3", "message 1"]
+            messages
+                .iter()
+                .map(|x| x.object.as_str())
+                .collect::<Vec<&str>>(),
+            ["id:3", "id:1"]
         );
     }
 
