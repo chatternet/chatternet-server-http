@@ -347,6 +347,89 @@ impl TablesActivityPub for Connection {
     }
 }
 
+#[async_trait]
+pub trait TableObjects {
+    async fn create_objects(&mut self) -> Result<()>;
+    async fn put_or_update_object(&mut self, id: &str, object: Option<&str>) -> Result<()>;
+    async fn get_object(&mut self, id: &str) -> Result<Option<String>>;
+    async fn has_object(&mut self, id: &str) -> Result<bool>;
+}
+
+#[async_trait]
+impl TableObjects for Connection {
+    async fn create_objects(&mut self) -> Result<()> {
+        sqlx::query(
+            "\
+            CREATE TABLE IF NOT EXISTS `Objects` \
+            (\
+                `object_id` TEXT PRIMARY KEY, \
+                `object` TEXT\
+            );\
+            ",
+        )
+        .execute(&mut *self)
+        .await?;
+        Ok(())
+    }
+
+    async fn has_object(&mut self, id: &str) -> Result<bool> {
+        let query = sqlx::query(
+            "\
+            SELECT 1 FROM `Objects` \
+            WHERE `object_id` = $1 \
+            LIMIT 1;\
+            ",
+        )
+        .bind(id);
+        Ok(query.fetch_optional(&mut *self).await?.is_some())
+    }
+
+    async fn put_or_update_object(&mut self, id: &str, object: Option<&str>) -> Result<()> {
+        // insert if object not yet known
+        if !self.has_object(id).await? {
+            sqlx::query(
+                "\
+                INSERT INTO `Objects` \
+                (`object_id`, `object`) \
+                VALUES($1, $2);\
+                ",
+            )
+            .bind(id)
+            .bind(object)
+            .execute(&mut *self)
+            .await?;
+        }
+        // update only if there is a value to update
+        else if object.is_some() {
+            sqlx::query(
+                "\
+                UPDATE `Objects` \
+                SET `object` = $1 \
+                WHERE `object_id` = $2\
+                ",
+            )
+            .bind(object)
+            .bind(id)
+            .execute(&mut *self)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn get_object(&mut self, id: &str) -> Result<Option<String>> {
+        Ok(sqlx::query(
+            "\
+            SELECT `object` FROM `Objects` \
+            WHERE `object_id` = $1;\
+            ",
+        )
+        .bind(id)
+        .fetch_one(self)
+        .await?
+        .get("object"))
+    }
+}
+
 pub type DbPool = SqlitePool;
 
 pub async fn new_db_pool(url: &str) -> Result<DbPool> {
@@ -360,6 +443,7 @@ pub async fn new_db_pool(url: &str) -> Result<DbPool> {
     connection.create_messages_audiences().await?;
     connection.create_actors_audiences().await?;
     connection.create_actors_contacts().await?;
+    connection.create_objects().await?;
     Ok(db_pool)
 }
 
@@ -562,6 +646,22 @@ mod test {
                 .await
                 .unwrap(),
             ["message 3", "message 2", "message 1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn db_puts_and_gets_an_object() {
+        let db_pool = new_db_pool("sqlite::memory:").await.unwrap();
+        let mut connection = db_pool.acquire().await.unwrap();
+        connection.put_or_update_object("id:1", None).await.unwrap();
+        assert_eq!(connection.get_object("id:1").await.unwrap(), None);
+        connection
+            .put_or_update_object("id:1", Some("object"))
+            .await
+            .unwrap();
+        assert_eq!(
+            connection.get_object("id:1").await.unwrap(),
+            Some("object".to_string())
         );
     }
 }

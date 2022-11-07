@@ -111,6 +111,35 @@ impl Actor {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Object {
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+    pub id: URI,
+    #[serde(rename = "type")]
+    pub object_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(flatten)]
+    pub members: Option<Map<String, Value>>,
+}
+
+impl Object {
+    pub fn new(
+        object_id: String,
+        object_type: String,
+        members: Option<Map<String, Value>>,
+    ) -> Result<Self> {
+        let id = URI::from_str(&object_id)?;
+        Ok(Object {
+            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            id,
+            object_type,
+            members,
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum MessageType {
     Create,
     Follow,

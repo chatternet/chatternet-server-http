@@ -8,7 +8,7 @@ use warp::{Filter, Rejection};
 use crate::chatternet::activities::{actor_id_from_did, Message, MessageType};
 use crate::db::{
     Connection, DbPool, TableActorsAudiences, TableActorsContacts, TableMessages,
-    TableMessagesAudiences, TablesActivityPub,
+    TableMessagesAudiences, TableObjects, TablesActivityPub,
 };
 use crate::errors::Error;
 
@@ -123,6 +123,12 @@ async fn handle_did_outbox(
             .await
             .map_err(Error)?;
     }
+
+    // create an empty object in the DB which can be updated later
+    connection
+        .put_or_update_object(message.object.as_str(), None)
+        .await
+        .map_err(Error)?;
 
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|x| Error(anyhow!(x)))?;
