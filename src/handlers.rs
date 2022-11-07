@@ -1,12 +1,15 @@
 use anyhow::{anyhow, Result};
 use did_method_key::DIDKey;
+use serde::{Deserialize, Serialize};
 use sqlx::Acquire;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
 
-use crate::chatternet::activities::{actor_id_from_did, ActivityType, Actor, Message, Object};
+use crate::chatternet::activities::{
+    actor_id_from_did, ActivityType, Actor, Inbox, Message, Object,
+};
 use crate::db::{
     get_actor, get_actor_audiences, get_inbox_for_actor, get_object, has_actor, has_message,
     has_object, put_actor_audience, put_actor_contact, put_message, put_message_audience,
@@ -157,22 +160,38 @@ async fn handle_did_outbox(
     Ok(StatusCode::OK)
 }
 
-async fn handle_did_inbox(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
+#[derive(Deserialize, Serialize)]
+struct DidInboxQuery {
+    after: String,
+}
+
+async fn handle_did_inbox(
+    did: String,
+    query: Option<DidInboxQuery>,
+    pool: Arc<Pool>,
+) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     let mut connection = pool
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    let messages = get_inbox_for_actor(&mut connection, &actor_id, 32)
-        .await
-        .map_err(Error)?;
+    let after = query.as_ref().map(|x| x.after.as_str());
+    let messages = get_inbox_for_actor(
+        &mut connection,
+        &actor_id,
+        32,
+        query.as_ref().map(|x| x.after.as_str()),
+    )
+    .await
+    .map_err(Error)?;
     let messages = messages
         .iter()
         .map(|x| serde_json::from_str(x).map_err(|x| anyhow!(x)))
         .collect::<Result<Vec<Message>>>()
         .map_err(Error)?;
-    Ok(warp::reply::json(&messages))
+    let inbox = Inbox::new(&actor_id, messages, after).map_err(Error)?;
+    Ok(warp::reply::json(&inbox))
 }
 
 fn id_from_followers(followers_id: &str) -> Result<String> {
@@ -345,7 +364,12 @@ pub fn build_api(
     let route_did_inbox = warp::get()
         .and(warp::path!("did" / String / "actor" / "inbox"))
         .and(with_resource(pool.clone()))
-        .and_then(handle_did_inbox);
+        .and_then(|did, pool| handle_did_inbox(did, None, pool));
+    let route_did_inbox_query = warp::get()
+        .and(warp::path!("did" / String / "actor" / "inbox"))
+        .and(warp::query::<DidInboxQuery>())
+        .and(with_resource(pool.clone()))
+        .and_then(|did, query, pool| handle_did_inbox(did, Some(query), pool));
     let route_did_following = warp::get()
         .and(warp::path!("did" / String / "actor" / "following"))
         .and(with_resource(pool.clone()))
@@ -374,6 +398,7 @@ pub fn build_api(
     route_version
         .or(route_did_outbox)
         .or(route_did_inbox)
+        .or(route_did_inbox_query)
         .or(route_did_following)
         .or(route_did_document)
         .or(route_object_get)
@@ -690,9 +715,10 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
+        let inbox: Inbox = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
-            messages
+            inbox
+                .ordered_items
                 .iter()
                 .map(|x| x.object.as_str())
                 .collect::<Vec<&str>>(),
@@ -717,9 +743,10 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let messages: Vec<Message> = serde_json::from_slice(response.body()).unwrap();
+        let inbox: Inbox = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
-            messages
+            inbox
+                .ordered_items
                 .iter()
                 .map(|x| x.object.as_str())
                 .collect::<Vec<&str>>(),

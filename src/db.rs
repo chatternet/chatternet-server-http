@@ -292,9 +292,9 @@ pub async fn get_inbox_for_actor(
     connection: &mut Connection,
     actor_id: &str,
     count: i64,
+    after: Option<&str>,
 ) -> Result<Vec<String>> {
-    let query = sqlx::query(
-        "\
+    let query_str_1: &'static str = "\
         SELECT `message` FROM `Messages` \
         WHERE (\
             `actor_id` = $1
@@ -311,12 +311,26 @@ pub async fn get_inbox_for_actor(
                 WHERE `ActorsAudiences`.`actor_id` = $1
             )\
         ) \
+        ";
+    let query_str_2: &'static str = "\
         ORDER BY `idx` DESC
         LIMIT $2;\
-        ",
-    )
-    .bind(actor_id)
-    .bind(count);
+        ";
+    let query_str_3: &'static str = "\
+        AND `idx` < (\
+            SELECT `idx` FROM `Messages` \
+            WHERE `message_id` = $3\
+        ) \
+        ";
+    let query_str_1_2: String = format!("{}{}", query_str_1, query_str_2);
+    let query_str_1_3_2: String = format!("{}{}{}", query_str_1, query_str_3, query_str_2);
+    let query = match after {
+        Some(after) => sqlx::query(&query_str_1_3_2)
+            .bind(actor_id)
+            .bind(count)
+            .bind(after),
+        None => sqlx::query(&query_str_1_2).bind(actor_id).bind(count),
+    };
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
     while let Some(row) = rows.try_next().await? {
@@ -636,7 +650,7 @@ mod test {
 
         // did:1 gets messages addressed to self
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 1)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
                 .await
                 .unwrap(),
             ["message 1"]
@@ -647,14 +661,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 1)
-                .await
-                .unwrap(),
-            ["message 2"]
-        );
-        // can get more messages
-        assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
                 .await
                 .unwrap(),
             ["message 2", "message 1"]
@@ -666,7 +673,7 @@ mod test {
             .unwrap();
         // but not a contact of did:2 so can't get messages
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 1)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 1, None)
                 .await
                 .unwrap(),
             ["message 2"]
@@ -677,10 +684,26 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
                 .await
                 .unwrap(),
             ["message 3", "message 2", "message 1"]
+        );
+
+        // can paginate
+        assert_eq!(
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some("id:3"))
+                .await
+                .unwrap(),
+            ["message 2", "message 1"]
+        );
+
+        // can paginate empty
+        assert!(
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some("id:1"))
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 

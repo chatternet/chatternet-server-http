@@ -418,6 +418,38 @@ impl Message {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum InboxType {
+    OrderedCollection,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct Inbox {
+    #[serde(rename = "@context")]
+    pub context: Vec<String>,
+    pub id: URI,
+    #[serde(rename = "type")]
+    pub inbox_type: InboxType,
+    pub ordered_items: Vec<Message>,
+}
+
+impl Inbox {
+    pub fn new(actor_id: &str, messages: Vec<Message>, after: Option<&str>) -> Result<Self> {
+        let id = match after {
+            Some(after) => format!("{}/inbox?after={}", actor_id, after),
+            None => format!("{}/inbox", actor_id),
+        };
+        let id = URI::try_from(id)?;
+        Ok(Inbox {
+            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            id,
+            inbox_type: InboxType::OrderedCollection,
+            ordered_items: messages,
+        })
+    }
+}
+
 #[async_trait]
 impl LinkedDataDocument for Message {
     fn get_contexts(&self) -> Result<Option<String>, LdpError> {
@@ -637,5 +669,22 @@ mod test {
                 .to_owned(),
         );
         message.verify().await.unwrap_err();
+    }
+
+    #[tokio::test]
+    async fn builds_inbox() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+            .await
+            .unwrap();
+        let message_id = message.id.clone();
+        let inbox = Inbox::new("did:example:a", Vec::new(), None).unwrap();
+        assert_eq!(inbox.id.as_str(), "did:example:a/inbox");
+        let inbox = Inbox::new("did:example:a", Vec::new(), Some("id:1")).unwrap();
+        assert_eq!(inbox.id.as_str(), "did:example:a/inbox?after=id:1");
+        let inbox = Inbox::new("did:example:a", vec![message], Some("id:1")).unwrap();
+        assert_eq!(inbox.id.as_str(), "did:example:a/inbox?after=id:1");
+        assert_eq!(inbox.ordered_items[0].id, message_id);
     }
 }
