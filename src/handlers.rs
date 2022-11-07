@@ -262,6 +262,9 @@ async fn handle_object_post(
     {
         Err(Error(anyhow!("posted object is not known")))?;
     }
+    if !object.verify().await.is_ok() {
+        Err(Error(anyhow!("posted object ID doesn't match contents")))?;
+    }
     let object = serde_json::to_string(&object).map_err(|x| Error(anyhow!(x)))?;
     put_or_update_object(&mut connection, &object_id, Some(&object))
         .await
@@ -758,6 +761,16 @@ mod test {
             .method("POST")
             .path("/object/id:wrong")
             .json(&object)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let mut object_invalid = object.clone();
+        object_invalid.members = Some(json!({"content": "abcd"}).as_object().unwrap().to_owned());
+        let response = request()
+            .method("POST")
+            .path(&format!("/object/{}", object_id))
+            .json(&object_invalid)
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
