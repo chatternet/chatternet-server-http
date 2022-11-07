@@ -6,11 +6,11 @@ use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
 
-use crate::chatternet::activities::{actor_id_from_did, ActivityType, Message, Object};
+use crate::chatternet::activities::{actor_id_from_did, ActivityType, Actor, Message, Object};
 use crate::db::{
-    get_actor_audiences, get_inbox_for_actor, get_object, has_message, has_object,
-    put_actor_audience, put_actor_contact, put_message, put_message_audience, put_or_update_object,
-    Connection, Pool,
+    get_actor, get_actor_audiences, get_inbox_for_actor, get_object, has_actor, has_message,
+    has_object, put_actor_audience, put_actor_contact, put_message, put_message_audience,
+    put_or_update_actor, put_or_update_object, Connection, Pool,
 };
 use crate::errors::Error;
 
@@ -134,6 +134,11 @@ async fn handle_did_outbox(
 
     // create an empty object in the DB which can be updated later
     put_or_update_object(&mut *connection, message.object.as_str(), None)
+        .await
+        .map_err(Error)?;
+
+    // create an empty actor in the DB which can be updated later
+    put_or_update_actor(&mut *connection, message.actor.as_str(), None)
         .await
         .map_err(Error)?;
 
@@ -272,6 +277,55 @@ async fn handle_object_post(
     Ok(StatusCode::OK)
 }
 
+async fn handle_did_actor_get(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|x| anyhow!(x))
+        .map_err(Error)?;
+    if !has_actor(&mut connection, &actor_id).await.map_err(Error)? {
+        Err(Error(anyhow!("requested actor is not known")))?;
+    }
+    let actor = get_actor(&mut connection, &actor_id).await.map_err(Error)?;
+    match actor {
+        Some(actor) => {
+            let actor: Actor = serde_json::from_str(&actor)
+                .map_err(|x| anyhow!(x))
+                .map_err(Error)?;
+            Ok(warp::reply::json(&actor))
+        }
+        None => Ok(warp::reply::json(&serde_json::Value::Null)),
+    }
+}
+
+async fn handle_did_actor_post(
+    did: String,
+    actor: Actor,
+    pool: Arc<Pool>,
+) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let mut connection = pool
+        .acquire()
+        .await
+        .map_err(|x| anyhow!(x))
+        .map_err(Error)?;
+    if actor_id.as_str() != actor_id {
+        Err(Error(anyhow!("posted actor has wrong ID")))?;
+    }
+    if !has_actor(&mut connection, &actor_id).await.map_err(Error)? {
+        Err(Error(anyhow!("posted actor is not known")))?;
+    }
+    if !actor.verify().await.is_ok() {
+        Err(Error(anyhow!("posted actor ID contents are invalid")))?;
+    }
+    let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
+    put_or_update_actor(&mut connection, &actor_id, Some(&actor))
+        .await
+        .map_err(Error)?;
+    Ok(StatusCode::OK)
+}
+
 fn with_resource<T: Clone + Send>(
     x: T,
 ) -> impl Filter<Extract = (T,), Error = std::convert::Infallible> + Clone {
@@ -308,6 +362,15 @@ pub fn build_api(
         .and(warp::body::json())
         .and(with_resource(pool.clone()))
         .and_then(handle_object_post);
+    let route_did_actor_get = warp::get()
+        .and(warp::path!("did" / String / "actor"))
+        .and(with_resource(pool.clone()))
+        .and_then(handle_did_actor_get);
+    let route_did_actor_post = warp::post()
+        .and(warp::path!("did" / String / "actor"))
+        .and(warp::body::json())
+        .and(with_resource(pool.clone()))
+        .and_then(handle_did_actor_post);
     route_version
         .or(route_did_outbox)
         .or(route_did_inbox)
@@ -315,6 +378,8 @@ pub fn build_api(
         .or(route_did_document)
         .or(route_object_get)
         .or(route_object_post)
+        .or(route_did_actor_get)
+        .or(route_did_actor_post)
 }
 
 #[cfg(test)]
@@ -328,7 +393,7 @@ mod test {
     use tokio;
     use warp::{http::StatusCode, test::request};
 
-    use crate::chatternet::activities::{ActivityType, Message, ObjectType};
+    use crate::chatternet::activities::{ActivityType, ActorType, Message, ObjectType};
     use crate::chatternet::didkey;
     use crate::db::new_pool;
 
@@ -729,7 +794,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_object_wont_update_wrong_object_id() {
+    async fn api_object_wont_update_invalid_object() {
         let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
         let api = build_api(pool);
 
@@ -747,15 +812,6 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-
-        let response = request()
-            .method("GET")
-            .path(&format!("/object/{}", object_id))
-            .reply(&api)
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let object_back: Option<Object> = serde_json::from_slice(response.body()).unwrap();
-        assert!(object_back.is_none());
 
         let response = request()
             .method("POST")
@@ -798,6 +854,139 @@ mod test {
             .method("POST")
             .path(&format!("/object/{}", object_id))
             .json(&object)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn api_actor_updates_and_gets() {
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
+
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+
+        let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
+        let actor = Actor::new(
+            did.to_string(),
+            ActorType::Person,
+            Some(members),
+            Some(&jwk),
+        )
+        .await
+        .unwrap();
+        let actor_id = actor.id.as_str();
+        let message = build_message(actor_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+
+        let response = request()
+            .method("POST")
+            .path(&format!("/did/{}/actor/outbox", did))
+            .json(&message)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/actor", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let actor_back: Option<Actor> = serde_json::from_slice(response.body()).unwrap();
+        assert!(actor_back.is_none());
+
+        let response = request()
+            .method("POST")
+            .path(&format!("/did/{}/actor", did))
+            .json(&actor)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}/actor", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let actor_back: Option<Actor> = serde_json::from_slice(response.body()).unwrap();
+        let actor_back = actor_back.unwrap();
+        assert_eq!(actor_back.id, actor.id);
+    }
+
+    #[tokio::test]
+    async fn api_actor_wont_update_invalid_actor() {
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
+
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+
+        let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
+        let actor = Actor::new(
+            did.to_string(),
+            ActorType::Person,
+            Some(members),
+            Some(&jwk),
+        )
+        .await
+        .unwrap();
+        let actor_id = actor.id.as_str();
+        let message = build_message(actor_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+
+        let response = request()
+            .method("POST")
+            .path(&format!("/did/{}/actor/outbox", did))
+            .json(&message)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = request()
+            .method("POST")
+            .path("/did/did:example:a/actor")
+            .json(&actor)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let mut actor_invalid = actor.clone();
+        actor_invalid.members = Some(json!({"name": "abcd"}).as_object().unwrap().to_owned());
+        let response = request()
+            .method("POST")
+            .path(&format!("/did/{}/actor", did))
+            .json(&actor_invalid)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn api_actor_wont_get_unknown() {
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
+        let response = request()
+            .method("GET")
+            .path("/did/did:example:a/actor")
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn api_actor_wont_post_unknown() {
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let actor = Actor::new(did.to_string(), ActorType::Person, None, None)
+            .await
+            .unwrap();
+        let response = request()
+            .method("POST")
+            .path(&format!("/did/{}/actor", did))
+            .json(&actor)
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
