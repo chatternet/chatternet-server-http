@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use did_method_key::DIDKey;
+use sqlx::Acquire;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
 use warp::http::StatusCode;
@@ -7,8 +8,8 @@ use warp::{Filter, Rejection};
 
 use crate::chatternet::activities::{actor_id_from_did, Message, MessageType};
 use crate::db::{
-    Connection, DbPool, TableActorsAudiences, TableActorsContacts, TableMessages,
-    TableMessagesAudiences, TableObjects, TablesActivityPub,
+    get_actor_audiences, get_inbox_for_actor, has_message, put_actor_audience, put_actor_contact,
+    put_message, put_message_audience, put_or_update_object, Connection, Pool,
 };
 use crate::errors::Error;
 
@@ -75,26 +76,30 @@ async fn handle_follow(message: &Message, connection: &mut Connection) -> Result
     let object_id = message.object.as_str();
     // following a did, use it as a contact for filtering
     if object_id.starts_with("did:") {
-        connection.put_actor_contact(&actor_id, &object_id).await?;
+        put_actor_contact(&mut *connection, &actor_id, &object_id).await?;
     }
     // following any id, add to its followers collection
-    connection
-        .put_actor_audience(&actor_id, &format!("{}/followers", object_id))
-        .await?;
+    put_actor_audience(
+        &mut *connection,
+        &actor_id,
+        &format!("{}/followers", object_id),
+    )
+    .await?;
     Ok(())
 }
 
 async fn handle_did_outbox(
     did: String,
     message: Message,
-    db_pool: Arc<DbPool>,
+    pool: Arc<Pool>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     if actor_id != message.actor.as_str() {
         Err(anyhow!("posting to the wrong outbox for the message actor")).map_err(Error)?;
     }
 
-    let mut connection = db_pool
+    let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
+    let connection = transaction
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
@@ -102,14 +107,17 @@ async fn handle_did_outbox(
 
     // if already known, take no actions
     let message_id = message.verify().await.map_err(Error)?;
-    if connection.has_message(&message_id).await.map_err(Error)? {
+    if has_message(&mut *connection, &message_id)
+        .await
+        .map_err(Error)?
+    {
         return Ok(StatusCode::ACCEPTED);
     };
 
     // run type-dependent side effects
     match message.message_type {
         // activity expresses a follow relationship
-        MessageType::Follow => handle_follow(&message, &mut connection)
+        MessageType::Follow => handle_follow(&message, &mut *connection)
             .await
             .map_err(Error)?,
         _ => (),
@@ -118,40 +126,39 @@ async fn handle_did_outbox(
     // store this message id for its audiences
     let audiences_id = build_audiences_id(&message).map_err(Error)?;
     for audience_id in audiences_id {
-        connection
-            .put_message_audience(&message_id, &audience_id)
+        put_message_audience(&mut *connection, &message_id, &audience_id)
             .await
             .map_err(Error)?;
     }
 
     // create an empty object in the DB which can be updated later
-    connection
-        .put_or_update_object(message.object.as_str(), None)
+    put_or_update_object(&mut *connection, message.object.as_str(), None)
         .await
         .map_err(Error)?;
 
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|x| Error(anyhow!(x)))?;
-    connection
-        .put_message(&message, &message_id, &actor_id)
+    put_message(&mut *connection, &message, &message_id, &actor_id)
         .await
+        .map_err(Error)?;
+
+    transaction
+        .commit()
+        .await
+        .map_err(|x| anyhow!(x))
         .map_err(Error)?;
 
     Ok(StatusCode::OK)
 }
 
-async fn handle_did_inbox(
-    did: String,
-    db_pool: Arc<DbPool>,
-) -> Result<impl warp::Reply, Rejection> {
+async fn handle_did_inbox(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
-    let mut connection = db_pool
+    let mut connection = pool
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    let messages = connection
-        .get_inbox_for_actor(&actor_id, 32)
+    let messages = get_inbox_for_actor(&mut connection, &actor_id, 32)
         .await
         .map_err(Error)?;
     let messages = messages
@@ -172,18 +179,14 @@ fn id_from_followers(followers_id: &str) -> Result<String> {
     Ok(id.to_string())
 }
 
-async fn handle_did_following(
-    did: String,
-    db_pool: Arc<DbPool>,
-) -> Result<impl warp::Reply, Rejection> {
+async fn handle_did_following(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
-    let mut connection = db_pool
+    let mut connection = pool
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    let ids = connection
-        .get_actor_audiences(&actor_id)
+    let ids = get_actor_audiences(&mut *connection, &actor_id)
         .await
         .map_err(Error)?;
     let ids = ids
@@ -211,22 +214,22 @@ fn with_resource<T: Clone + Send>(
 }
 
 pub fn build_api(
-    db_pool: Arc<DbPool>,
+    pool: Arc<Pool>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
     let route_did_outbox = warp::post()
         .and(warp::path!("did" / String / "actor" / "outbox"))
         .and(warp::body::json())
-        .and(with_resource(db_pool.clone()))
+        .and(with_resource(pool.clone()))
         .and_then(handle_did_outbox);
     let route_did_inbox = warp::get()
         .and(warp::path!("did" / String / "actor" / "inbox"))
-        .and(with_resource(db_pool.clone()))
+        .and(with_resource(pool.clone()))
         .and_then(handle_did_inbox);
     let route_did_following = warp::get()
         .and(warp::path!("did" / String / "actor" / "following"))
-        .and(with_resource(db_pool.clone()))
+        .and(with_resource(pool.clone()))
         .and_then(handle_did_following);
     let route_did_document = warp::get()
         .and(warp::path!("did" / String))
@@ -251,7 +254,7 @@ mod test {
 
     use crate::chatternet::activities::{Message, MessageType};
     use crate::chatternet::didkey;
-    use crate::db::new_db_pool;
+    use crate::db::new_pool;
 
     use super::*;
 
@@ -305,8 +308,8 @@ mod test {
 
     #[tokio::test]
     async fn api_handles_version() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request().method("GET").path("/version").reply(&api).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -315,8 +318,8 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_handles_message() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -342,8 +345,8 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_wrong_did() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
@@ -359,8 +362,8 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_invalid_message() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -379,8 +382,8 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_with_bcc() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -403,8 +406,8 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_with_bto() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -433,8 +436,8 @@ mod test {
     }
     #[tokio::test]
     async fn api_outbox_handles_follow() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -462,8 +465,8 @@ mod test {
 
     #[tokio::test]
     async fn api_inbox_returns_messages() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
 
         let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
@@ -581,8 +584,8 @@ mod test {
 
     #[tokio::test]
     async fn api_did_document_build_document() {
-        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(db_pool);
+        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(pool);
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let response = request()
