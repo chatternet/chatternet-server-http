@@ -1,4 +1,6 @@
 use anyhow::{anyhow, Result};
+use did_method_key::DIDKey;
+use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
 use warp::http::StatusCode;
 use warp::{Filter, Rejection};
@@ -192,6 +194,16 @@ async fn handle_did_following(
     Ok(warp::reply::json(&ids))
 }
 
+async fn handle_did_document(did: String) -> Result<impl warp::Reply, Rejection> {
+    let (_, document, _) = DIDKey
+        .resolve(&did, &ResolutionInputMetadata::default())
+        .await;
+    let document = document
+        .ok_or(anyhow!("unable to interpret DID"))
+        .map_err(Error)?;
+    Ok(warp::reply::json(&document))
+}
+
 fn with_resource<T: Clone + Send>(
     x: T,
 ) -> impl Filter<Extract = (T,), Error = std::convert::Infallible> + Clone {
@@ -216,11 +228,14 @@ pub fn build_api(
         .and(warp::path!("did" / String / "actor" / "following"))
         .and(with_resource(db_pool.clone()))
         .and_then(handle_did_following);
-    // TODO: did_document, did_actor, did_followers with pagination
+    let route_did_document = warp::get()
+        .and(warp::path!("did" / String))
+        .and_then(handle_did_document);
     route_version
         .or(route_did_outbox)
         .or(route_did_inbox)
         .or(route_did_following)
+        .or(route_did_document)
 }
 
 #[cfg(test)]
@@ -577,6 +592,31 @@ mod test {
         assert_eq!(
             messages_from_bytes(response.body()),
             ["message 3", "message 1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn api_did_document_build_document() {
+        let db_pool = Arc::new(new_db_pool("sqlite::memory:").await.unwrap());
+        let api = build_api(db_pool);
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let response = request()
+            .method("GET")
+            .path(&format!("/did/{}", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let document: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(
+            document
+                .as_object()
+                .unwrap()
+                .get("id")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            did
         );
     }
 }
