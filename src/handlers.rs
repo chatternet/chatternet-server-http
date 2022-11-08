@@ -104,6 +104,7 @@ async fn handle_did_outbox(
         Err(anyhow!("posting to the wrong outbox for the message actor")).map_err(Error)?;
     }
 
+    // read write
     let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
     let connection = transaction
         .acquire()
@@ -176,6 +177,7 @@ async fn handle_did_inbox(
     pool: Arc<Pool>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    // read only
     let mut connection = pool
         .acquire()
         .await
@@ -211,6 +213,7 @@ fn id_from_followers(followers_id: &str) -> Result<String> {
 
 async fn handle_did_following(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    // read only
     let mut connection = pool
         .acquire()
         .await
@@ -241,6 +244,7 @@ async fn handle_object_get(
     object_id: String,
     pool: Arc<Pool>,
 ) -> Result<impl warp::Reply, Rejection> {
+    // read only
     let mut connection = pool
         .acquire()
         .await
@@ -271,7 +275,9 @@ async fn handle_object_post(
     object: Object,
     pool: Arc<Pool>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let mut connection = pool
+    // read write
+    let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
+    let mut connection = transaction
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
@@ -298,11 +304,17 @@ async fn handle_object_post(
     put_or_update_object(&mut connection, &object_id, Some(&object))
         .await
         .map_err(Error)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|x| anyhow!(x))
+        .map_err(Error)?;
     Ok(StatusCode::OK)
 }
 
 async fn handle_did_actor_get(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    // read only
     let mut connection = pool
         .acquire()
         .await
@@ -334,7 +346,9 @@ async fn handle_did_actor_post(
     pool: Arc<Pool>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
-    let mut connection = pool
+    // read write
+    let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
+    let mut connection = transaction
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
@@ -354,6 +368,11 @@ async fn handle_did_actor_post(
     let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
     put_or_update_object(&mut connection, &actor_id, Some(&actor))
         .await
+        .map_err(Error)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|x| anyhow!(x))
         .map_err(Error)?;
     Ok(StatusCode::OK)
 }
