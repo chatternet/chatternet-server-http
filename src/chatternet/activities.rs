@@ -20,12 +20,15 @@ use std::str::FromStr;
 
 use super::ldcontexts;
 
+const CONTEXT_ACTIVITY_STREAMS: &str = ldcontexts::ACTIVITY_STREAMS_URI;
+const CONTEXT_CREDENTIALS: &str = "https://www.w3.org/2018/credentials/v1";
+
 pub fn new_context_loader() -> ContextLoader {
     ContextLoader::empty()
         .with_static_loader()
         .with_context_map_from(HashMap::from([(
-            ldcontexts::ACTIVITY_STREAMS_URI.to_owned(),
-            ldcontexts::ACTIVITY_STREAMS.to_owned(),
+            ldcontexts::ACTIVITY_STREAMS_URI.to_string(),
+            ldcontexts::ACTIVITY_STREAMS.to_string(),
         )]))
         .unwrap()
 }
@@ -118,11 +121,10 @@ pub struct Actor {
     pub following: URI,
     pub followers: URI,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<Proof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "https://w3id.org/security#proof")]
-    pub proof: Option<Proof>,
 }
 
 impl Actor {
@@ -142,15 +144,18 @@ impl Actor {
         let following = URI::try_from(format!("{}/following", &actor_id))?;
         let followers = URI::try_from(format!("{}/followers", &actor_id))?;
         let mut actor = Actor {
-            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            context: vec![
+                CONTEXT_ACTIVITY_STREAMS.to_string(),
+                CONTEXT_CREDENTIALS.to_string(),
+            ],
             id,
             actor_type,
             inbox,
             outbox,
             following,
             followers,
-            members,
             proof: None,
+            members,
         };
         if let Some(jwk) = jwk {
             actor.proof = Some(build_proof(&actor, &did, jwk).await?);
@@ -266,7 +271,7 @@ pub struct Object {
 impl Object {
     pub async fn new(object_type: ObjectType, members: Option<Map<String, Value>>) -> Result<Self> {
         let mut object = Object {
-            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
             id: None,
             object_type,
             members,
@@ -339,11 +344,10 @@ pub struct Message {
     pub object: Vec<URI>,
     pub published: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<Proof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "https://w3id.org/security#proof")]
-    pub proof: Option<Proof>,
 }
 
 impl Message {
@@ -365,14 +369,17 @@ impl Message {
         // build an ID which is isomorphic to the subject object such that new
         // messages cannot override old ones
         let mut message = Message {
-            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            context: vec![
+                CONTEXT_ACTIVITY_STREAMS.to_string(),
+                CONTEXT_CREDENTIALS.to_string(),
+            ],
             id: None,
             message_type: activity_type,
             actor: actor_id,
             object: objects_id,
             published,
-            members,
             proof: None,
+            members,
         };
         message.id = Some(
             URI::try_from(cid_to_urn(
@@ -446,7 +453,7 @@ impl Inbox {
         };
         let id = URI::try_from(id)?;
         Ok(Inbox {
-            context: vec![ldcontexts::ACTIVITY_STREAMS_URI.to_string()],
+            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
             id,
             inbox_type: InboxType::OrderedCollection,
             ordered_items: messages,
@@ -494,7 +501,7 @@ mod test {
     #[tokio::test]
     async fn builds_cid_from_object() {
         let activity_1 = json!({
-            "@context": [ldcontexts::ACTIVITY_STREAMS_URI],
+            "@context": [CONTEXT_ACTIVITY_STREAMS],
             "content": "abc",
         });
         let activity_2 = json!({
@@ -503,7 +510,7 @@ mod test {
         let cid_1 = cid_from_json(&activity_1, &mut new_context_loader(), None)
             .await
             .unwrap();
-        let more_contexts = serde_json::to_string(&[ldcontexts::ACTIVITY_STREAMS_URI]).unwrap();
+        let more_contexts = serde_json::to_string(&[CONTEXT_ACTIVITY_STREAMS]).unwrap();
         let cid_2 = cid_from_json(&activity_2, &mut new_context_loader(), Some(&more_contexts))
             .await
             .unwrap();
