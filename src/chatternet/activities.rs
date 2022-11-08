@@ -336,7 +336,7 @@ pub struct Message {
     #[serde(rename = "type")]
     pub message_type: ActivityType,
     pub actor: URI,
-    pub object: URI,
+    pub object: Vec<URI>,
     pub published: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
@@ -349,14 +349,18 @@ pub struct Message {
 impl Message {
     pub async fn new(
         actor_did: &str,
-        object_id: &str,
+        objects_id: &[impl AsRef<str>],
         activity_type: ActivityType,
         published: Option<DateTime<Utc>>,
         members: Option<Map<String, Value>>,
         jwk: &JWK,
     ) -> Result<Self> {
         let actor_id = URI::try_from(actor_id_from_did(actor_did)?)?;
-        let object_id = URI::from_str(object_id)?;
+        let objects_id: Result<Vec<URI>> = objects_id
+            .iter()
+            .map(|x| URI::from_str(x.as_ref()).map_err(anyhow::Error::new))
+            .collect();
+        let objects_id = objects_id?;
         let published = published.unwrap_or_else(now_ms);
         // build an ID which is isomorphic to the subject object such that new
         // messages cannot override old ones
@@ -365,7 +369,7 @@ impl Message {
             id: None,
             message_type: activity_type,
             actor: actor_id,
-            object: object_id,
+            object: objects_id,
             published,
             members,
             proof: None,
@@ -608,7 +612,7 @@ mod test {
     async fn builds_message_and_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+        let message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.verify().await.unwrap();
@@ -618,7 +622,7 @@ mod test {
     async fn builds_message_wrong_actor_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+        let mut message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
@@ -631,7 +635,7 @@ mod test {
     async fn builds_message_wrong_id_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+        let mut message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.id = Some(URI::from_str("a:b").unwrap());
@@ -643,10 +647,10 @@ mod test {
     async fn builds_message_modified_content_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+        let mut message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
-        message.object = URI::from_str("id:b").unwrap();
+        message.object = vec![URI::from_str("id:b").unwrap()];
         message.verify().await.unwrap_err();
     }
 
@@ -659,7 +663,7 @@ mod test {
     async fn builds_message_aribtrary_data_doesnt_verify() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let mut message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+        let mut message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         message.members = Some(
@@ -675,7 +679,7 @@ mod test {
     async fn builds_inbox() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = Message::new(&did, "id:a", ActivityType::Create, None, None, &jwk)
+        let message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
         let message_id = message.id.clone();

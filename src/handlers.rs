@@ -77,18 +77,20 @@ fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
 
 async fn handle_follow(message: &Message, connection: &mut Connection) -> Result<()> {
     let actor_id = message.actor.as_str();
-    let object_id = message.object.as_str();
-    // following a did, use it as a contact for filtering
-    if object_id.starts_with("did:") {
-        put_actor_contact(&mut *connection, &actor_id, &object_id).await?;
+    let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
+    for object_id in objects_id {
+        // following a did, it as a contact for filtering
+        if object_id.starts_with("did:") {
+            put_actor_contact(&mut *connection, &actor_id, &object_id).await?;
+        }
+        // following any id, add to its followers collection
+        put_actor_audience(
+            &mut *connection,
+            &actor_id,
+            &format!("{}/followers", object_id),
+        )
+        .await?;
     }
-    // following any id, add to its followers collection
-    put_actor_audience(
-        &mut *connection,
-        &actor_id,
-        &format!("{}/followers", object_id),
-    )
-    .await?;
     Ok(())
 }
 
@@ -135,10 +137,13 @@ async fn handle_did_outbox(
             .map_err(Error)?;
     }
 
-    // create an empty object in the DB which can be updated later
-    put_or_update_object(&mut *connection, message.object.as_str(), None)
-        .await
-        .map_err(Error)?;
+    // create empty objects in the DB which can be updated later
+    let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
+    for object_id in objects_id {
+        put_or_update_object(&mut *connection, object_id, None)
+            .await
+            .map_err(Error)?;
+    }
 
     // create an empty actor in the DB which can be updated later
     put_or_update_actor(&mut *connection, message.actor.as_str(), None)
@@ -444,7 +449,7 @@ mod test {
         .to_owned();
         Message::new(
             &did,
-            object_id,
+            &[object_id],
             ActivityType::Create,
             None,
             Some(members),
@@ -601,9 +606,9 @@ mod test {
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
-    async fn build_follow(follow_id: &str, jwk: &JWK) -> Message {
+    async fn build_follow(follows_id: &[&str], jwk: &JWK) -> Message {
         let did = didkey::did_from_jwk(jwk).unwrap();
-        Message::new(&did, follow_id, ActivityType::Follow, None, None, &jwk)
+        Message::new(&did, follows_id, ActivityType::Follow, None, None, &jwk)
             .await
             .unwrap()
     }
@@ -619,7 +624,7 @@ mod test {
             request()
                 .method("POST")
                 .path(&format!("/did/{}/actor/outbox", did))
-                .json(&build_follow("tag:1", &jwk).await)
+                .json(&build_follow(&["tag:1", "tag:2"], &jwk).await)
                 .reply(&api)
                 .await
                 .status(),
@@ -633,7 +638,7 @@ mod test {
             .await;
         assert_eq!(response.status(), StatusCode::OK);
         let ids: Vec<String> = serde_json::from_slice(response.body()).unwrap();
-        assert_eq!(ids, ["tag:1"]);
+        assert_eq!(ids, ["tag:1", "tag:2"]);
     }
 
     #[tokio::test]
@@ -720,7 +725,8 @@ mod test {
             inbox
                 .ordered_items
                 .iter()
-                .map(|x| x.object.as_str())
+                .map(|x| x.object.iter().map(|x| x.as_str()))
+                .flatten()
                 .collect::<Vec<&str>>(),
             ["id:1"]
         );
@@ -730,7 +736,7 @@ mod test {
             request()
                 .method("POST")
                 .path(&format!("/did/{}/actor/outbox", did_1))
-                .json(&build_follow(&format!("{}/actor", did_2), &jwk_1).await)
+                .json(&build_follow(&[&format!("{}/actor", did_2)], &jwk_1).await)
                 .reply(&api)
                 .await
                 .status(),
@@ -748,7 +754,8 @@ mod test {
             inbox
                 .ordered_items
                 .iter()
-                .map(|x| x.object.as_str())
+                .map(|x| x.object.iter().map(|x| x.as_str()))
+                .flatten()
                 .collect::<Vec<&str>>(),
             ["id:3", "id:1"]
         );
