@@ -417,83 +417,6 @@ pub async fn get_object(connection: &mut Connection, object_id: &str) -> Result<
     .get("object"))
 }
 
-pub async fn create_actors(connection: &mut Connection) -> Result<()> {
-    sqlx::query(
-        "\
-        CREATE TABLE IF NOT EXISTS `Actors` \
-        (\
-            `actor_id` TEXT PRIMARY KEY, \
-            `actor` TEXT\
-        );\
-        ",
-    )
-    .execute(&mut *connection)
-    .await?;
-    Ok(())
-}
-
-pub async fn has_actor(connection: &mut Connection, id: &str) -> Result<bool> {
-    let query = sqlx::query(
-        "\
-        SELECT 1 FROM `Actors` \
-        WHERE `actor_id` = $1 \
-        LIMIT 1;\
-        ",
-    )
-    .bind(id);
-    Ok(query.fetch_optional(&mut *connection).await?.is_some())
-}
-
-pub async fn put_or_update_actor(
-    connection: &mut Connection,
-    actor_id: &str,
-    actor: Option<&str>,
-) -> Result<()> {
-    let has_actor = has_actor(&mut *connection, actor_id).await?;
-    // insert if actor not yet known
-    if !has_actor {
-        sqlx::query(
-            "\
-            INSERT INTO `Actors` \
-            (`actor_id`, `actor`) \
-            VALUES($1, $2);\
-            ",
-        )
-        .bind(actor_id)
-        .bind(actor)
-        .execute(&mut *connection)
-        .await?;
-    }
-    // update only if there is a value to update
-    else if actor.is_some() {
-        sqlx::query(
-            "\
-            UPDATE `Actors` \
-            SET `actor` = $1 \
-            WHERE `actor_id` = $2\
-            ",
-        )
-        .bind(actor)
-        .bind(actor_id)
-        .execute(&mut *connection)
-        .await?;
-    }
-    Ok(())
-}
-
-pub async fn get_actor(connection: &mut Connection, actor_id: &str) -> Result<Option<String>> {
-    Ok(sqlx::query(
-        "\
-        SELECT `actor` FROM `Actors` \
-        WHERE `actor_id` = $1;\
-        ",
-    )
-    .bind(actor_id)
-    .fetch_one(connection)
-    .await?
-    .get("actor"))
-}
-
 pub async fn new_pool(url: &str) -> Result<Pool> {
     let pool = SqlitePoolOptions::new()
         .connect(url)
@@ -506,7 +429,6 @@ pub async fn new_pool(url: &str) -> Result<Pool> {
     create_actors_audiences(connection).await?;
     create_actors_contacts(connection).await?;
     create_objects(connection).await?;
-    create_actors(connection).await?;
     transaction.commit().await?;
     Ok(pool)
 }
@@ -721,23 +643,6 @@ mod test {
         assert_eq!(
             get_object(&mut connection, "id:1").await.unwrap(),
             Some("object".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn db_puts_and_gets_an_actor() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
-        put_or_update_actor(&mut connection, "did:1", None)
-            .await
-            .unwrap();
-        assert_eq!(get_actor(&mut connection, "did:1").await.unwrap(), None);
-        put_or_update_actor(&mut connection, "did:1", Some("actor"))
-            .await
-            .unwrap();
-        assert_eq!(
-            get_actor(&mut connection, "did:1").await.unwrap(),
-            Some("actor".to_string())
         );
     }
 }

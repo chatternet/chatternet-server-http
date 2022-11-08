@@ -11,9 +11,9 @@ use crate::chatternet::activities::{
     actor_id_from_did, ActivityType, Actor, Inbox, Message, Object,
 };
 use crate::db::{
-    get_actor, get_actor_audiences, get_inbox_for_actor, get_object, has_actor, has_message,
-    has_object, put_actor_audience, put_actor_contact, put_message, put_message_audience,
-    put_or_update_actor, put_or_update_object, Connection, Pool,
+    get_actor_audiences, get_inbox_for_actor, get_object, has_message, has_object,
+    put_actor_audience, put_actor_contact, put_message, put_message_audience, put_or_update_object,
+    Connection, Pool,
 };
 use crate::errors::Error;
 
@@ -145,8 +145,8 @@ async fn handle_did_outbox(
             .map_err(Error)?;
     }
 
-    // create an empty actor in the DB which can be updated later
-    put_or_update_actor(&mut *connection, message.actor.as_str(), None)
+    // create an empty object for the actor which can be updated later
+    put_or_update_object(&mut *connection, message.actor.as_str(), None)
         .await
         .map_err(Error)?;
 
@@ -308,10 +308,15 @@ async fn handle_did_actor_get(did: String, pool: Arc<Pool>) -> Result<impl warp:
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    if !has_actor(&mut connection, &actor_id).await.map_err(Error)? {
+    if !has_object(&mut connection, &actor_id)
+        .await
+        .map_err(Error)?
+    {
         Err(Error(anyhow!("requested actor is not known")))?;
     }
-    let actor = get_actor(&mut connection, &actor_id).await.map_err(Error)?;
+    let actor = get_object(&mut connection, &actor_id)
+        .await
+        .map_err(Error)?;
     match actor {
         Some(actor) => {
             let actor: Actor = serde_json::from_str(&actor)
@@ -337,14 +342,17 @@ async fn handle_did_actor_post(
     if actor_id.as_str() != actor_id {
         Err(Error(anyhow!("posted actor has wrong ID")))?;
     }
-    if !has_actor(&mut connection, &actor_id).await.map_err(Error)? {
+    if !has_object(&mut connection, &actor_id)
+        .await
+        .map_err(Error)?
+    {
         Err(Error(anyhow!("posted actor is not known")))?;
     }
     if !actor.verify().await.is_ok() {
         Err(Error(anyhow!("posted actor ID contents are invalid")))?;
     }
     let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
-    put_or_update_actor(&mut connection, &actor_id, Some(&actor))
+    put_or_update_object(&mut connection, &actor_id, Some(&actor))
         .await
         .map_err(Error)?;
     Ok(StatusCode::OK)
