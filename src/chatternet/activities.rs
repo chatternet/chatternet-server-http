@@ -48,8 +48,12 @@ pub async fn cid_from_json(
     ))
 }
 
-pub fn cid_to_urn(cid: Cid) -> String {
-    format!("urn:cid:{}", cid.to_string())
+pub fn uri_from_cid(cid: Cid) -> Result<URI> {
+    Ok(URI::try_from(format!("urn:cid:{}", cid.to_string()))?)
+}
+
+pub fn cid_from_uri(uri: &URI) -> Result<Cid> {
+    Ok(Cid::try_from(&uri.as_str()[8..])?)
 }
 
 pub fn actor_id_from_did(did: &str) -> Result<String> {
@@ -277,10 +281,7 @@ impl Object {
             members,
         };
         object.id = Some(
-            URI::try_from(cid_to_urn(
-                cid_from_json(&object, &mut new_context_loader(), None).await?,
-            ))
-            .unwrap(),
+            uri_from_cid(cid_from_json(&object, &mut new_context_loader(), None).await?).unwrap(),
         );
         Ok(object)
     }
@@ -291,9 +292,10 @@ impl Object {
             .id
             .take()
             .ok_or(anyhow!("object does not contain an ID"))?;
-        if id.as_str() != cid_to_urn(cid_from_json(&object, &mut new_context_loader(), None).await?)
-        {
-            return Err(anyhow!("message ID does not match its contents"));
+        let cid_object = cid_from_uri(&id)?;
+        let cid_data = cid_from_json(&object, &mut new_context_loader(), None).await?;
+        if cid_object.hash().digest() != cid_data.hash().digest() {
+            return Err(anyhow!("object ID does not match its contents"));
         }
         Ok(id.to_string())
     }
@@ -382,10 +384,7 @@ impl Message {
             members,
         };
         message.id = Some(
-            URI::try_from(cid_to_urn(
-                cid_from_json(&message, &mut new_context_loader(), None).await?,
-            ))
-            .unwrap(),
+            uri_from_cid(cid_from_json(&message, &mut new_context_loader(), None).await?).unwrap(),
         );
         message.proof = Some(build_proof(&message, &actor_did, jwk).await?);
         Ok(message)
@@ -418,9 +417,9 @@ impl Message {
             .id
             .take()
             .ok_or(anyhow!("message does not contain an ID"))?;
-        if id.as_str()
-            != cid_to_urn(cid_from_json(&message, &mut new_context_loader(), None).await?)
-        {
+        let cid_message = cid_from_uri(&id)?;
+        let cid_data = cid_from_json(&message, &mut new_context_loader(), None).await?;
+        if cid_message.hash().digest() != cid_data.hash().digest() {
             return Err(anyhow!("message ID does not match its contents"));
         }
         message.id = Some(id.clone());
