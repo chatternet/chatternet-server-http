@@ -10,11 +10,7 @@ use warp::{Filter, Rejection};
 use crate::chatternet::activities::{
     actor_id_from_did, ActivityType, Actor, Inbox, Message, Object,
 };
-use crate::db::{
-    get_actor_audiences, get_inbox_for_actor, get_object, has_message, has_object,
-    put_actor_audience, put_actor_contact, put_message, put_message_audience, put_or_update_object,
-    Connection, Pool,
-};
+use crate::db::{self, Connection, Pool};
 use crate::errors::Error;
 
 fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
@@ -81,10 +77,10 @@ async fn handle_follow(message: &Message, connection: &mut Connection) -> Result
     for object_id in objects_id {
         // following a did, it as a contact for filtering
         if object_id.starts_with("did:") {
-            put_actor_contact(&mut *connection, &actor_id, &object_id).await?;
+            db::put_actor_contact(&mut *connection, &actor_id, &object_id).await?;
         }
         // following any id, add to its followers collection
-        put_actor_audience(
+        db::put_actor_audience(
             &mut *connection,
             &actor_id,
             &format!("{}/followers", object_id),
@@ -114,7 +110,7 @@ async fn handle_did_outbox(
 
     // if already known, take no actions
     let message_id = message.verify().await.map_err(Error)?;
-    if has_message(&mut *connection, &message_id)
+    if db::has_message(&mut *connection, &message_id)
         .await
         .map_err(Error)?
     {
@@ -133,7 +129,7 @@ async fn handle_did_outbox(
     // store this message id for its audiences
     let audiences_id = build_audiences_id(&message).map_err(Error)?;
     for audience_id in audiences_id {
-        put_message_audience(&mut *connection, &message_id, &audience_id)
+        db::put_message_audience(&mut *connection, &message_id, &audience_id)
             .await
             .map_err(Error)?;
     }
@@ -141,19 +137,19 @@ async fn handle_did_outbox(
     // create empty objects in the DB which can be updated later
     let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
-        put_or_update_object(&mut *connection, object_id, None)
+        db::put_or_update_object(&mut *connection, object_id, None)
             .await
             .map_err(Error)?;
     }
 
     // create an empty object for the actor which can be updated later
-    put_or_update_object(&mut *connection, message.actor.as_str(), None)
+    db::put_or_update_object(&mut *connection, message.actor.as_str(), None)
         .await
         .map_err(Error)?;
 
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|x| Error(anyhow!(x)))?;
-    put_message(&mut *connection, &message, &message_id, &actor_id)
+    db::put_message(&mut *connection, &message, &message_id, &actor_id)
         .await
         .map_err(Error)?;
 
@@ -184,7 +180,7 @@ async fn handle_did_inbox(
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
     let after = query.as_ref().map(|x| x.after.as_str());
-    let messages = get_inbox_for_actor(
+    let messages = db::get_inbox_for_actor(
         &mut connection,
         &actor_id,
         32,
@@ -219,7 +215,7 @@ async fn handle_did_following(did: String, pool: Arc<Pool>) -> Result<impl warp:
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    let ids = get_actor_audiences(&mut *connection, &actor_id)
+    let ids = db::get_actor_audiences(&mut *connection, &actor_id)
         .await
         .map_err(Error)?;
     let ids = ids
@@ -250,13 +246,13 @@ async fn handle_object_get(
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    if !has_object(&mut connection, &object_id)
+    if !db::has_object(&mut connection, &object_id)
         .await
         .map_err(Error)?
     {
         Err(Error(anyhow!("requested object is not known")))?;
     }
-    let object = get_object(&mut connection, &object_id)
+    let object = db::get_object(&mut connection, &object_id)
         .await
         .map_err(Error)?;
     match object {
@@ -291,7 +287,7 @@ async fn handle_object_post(
     {
         Err(Error(anyhow!("posted object has wrong ID")))?;
     }
-    if !has_object(&mut connection, &object_id)
+    if !db::has_object(&mut connection, &object_id)
         .await
         .map_err(Error)?
     {
@@ -301,7 +297,7 @@ async fn handle_object_post(
         Err(Error(anyhow!("posted object ID doesn't match contents")))?;
     }
     let object = serde_json::to_string(&object).map_err(|x| Error(anyhow!(x)))?;
-    put_or_update_object(&mut connection, &object_id, Some(&object))
+    db::put_or_update_object(&mut connection, &object_id, Some(&object))
         .await
         .map_err(Error)?;
     transaction
@@ -320,13 +316,13 @@ async fn handle_did_actor_get(did: String, pool: Arc<Pool>) -> Result<impl warp:
         .await
         .map_err(|x| anyhow!(x))
         .map_err(Error)?;
-    if !has_object(&mut connection, &actor_id)
+    if !db::has_object(&mut connection, &actor_id)
         .await
         .map_err(Error)?
     {
         Err(Error(anyhow!("requested actor is not known")))?;
     }
-    let actor = get_object(&mut connection, &actor_id)
+    let actor = db::get_object(&mut connection, &actor_id)
         .await
         .map_err(Error)?;
     match actor {
@@ -356,7 +352,7 @@ async fn handle_did_actor_post(
     if actor_id.as_str() != actor_id {
         Err(Error(anyhow!("posted actor has wrong ID")))?;
     }
-    if !has_object(&mut connection, &actor_id)
+    if !db::has_object(&mut connection, &actor_id)
         .await
         .map_err(Error)?
     {
@@ -366,7 +362,7 @@ async fn handle_did_actor_post(
         Err(Error(anyhow!("posted actor ID contents are invalid")))?;
     }
     let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
-    put_or_update_object(&mut connection, &actor_id, Some(&actor))
+    db::put_or_update_object(&mut connection, &actor_id, Some(&actor))
         .await
         .map_err(Error)?;
     transaction
