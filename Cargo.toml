@@ -12,7 +12,7 @@ async-trait = "0.1.58"
 chrono = "0.4.22"
 cid = "0.8.6"
 clap = { version = "4.0.18", features = ["derive"] }
-did-method-key = { path = "libs/ssi/did-key" }
+did-method-key = { git = "https://github.com/spruceid/ssi", rev="80be3ef98a68db75b5e8af32b258bc9d64374305" }
 ed25519-dalek = "1.0.1"
 futures = "0.3.25"
 log = "0.4.17"
@@ -21,6 +21,6 @@ rand = "0.8.5"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.87"
 sqlx = { version = "0.6.2", features = ["runtime-tokio-native-tls", "sqlite"] }
-ssi = { path = "libs/ssi" }
+ssi = { git = "https://github.com/spruceid/ssi", rev="80be3ef98a68db75b5e8af32b258bc9d64374305" }
 tokio = { version = "1.21.2", features = ["full"] }
 warp = "0.3.3"
