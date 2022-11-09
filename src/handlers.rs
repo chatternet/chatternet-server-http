@@ -385,41 +385,41 @@ pub fn build_api(
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
     let route_did_outbox = warp::post()
-        .and(warp::path!("did" / String / "actor" / "outbox"))
+        .and(warp::path!(String / "actor" / "outbox"))
         .and(warp::body::json())
         .and(with_resource(pool.clone()))
         .and_then(handle_did_outbox);
     let route_did_inbox = warp::get()
-        .and(warp::path!("did" / String / "actor" / "inbox"))
+        .and(warp::path!(String / "actor" / "inbox"))
         .and(with_resource(pool.clone()))
         .and_then(|did, pool| handle_did_inbox(did, None, pool));
     let route_did_inbox_query = warp::get()
-        .and(warp::path!("did" / String / "actor" / "inbox"))
+        .and(warp::path!(String / "actor" / "inbox"))
         .and(warp::query::<DidInboxQuery>())
         .and(with_resource(pool.clone()))
         .and_then(|did, query, pool| handle_did_inbox(did, Some(query), pool));
     let route_did_following = warp::get()
-        .and(warp::path!("did" / String / "actor" / "following"))
+        .and(warp::path!(String / "actor" / "following"))
         .and(with_resource(pool.clone()))
         .and_then(handle_did_following);
     let route_did_document = warp::get()
-        .and(warp::path!("did" / String))
+        .and(warp::path!(String))
         .and_then(handle_did_document);
     let route_object_get = warp::get()
-        .and(warp::path!("object" / String))
+        .and(warp::path!(String))
         .and(with_resource(pool.clone()))
         .and_then(handle_object_get);
     let route_object_post = warp::post()
-        .and(warp::path!("object" / String))
+        .and(warp::path!(String))
         .and(warp::body::json())
         .and(with_resource(pool.clone()))
         .and_then(handle_object_post);
     let route_did_actor_get = warp::get()
-        .and(warp::path!("did" / String / "actor"))
+        .and(warp::path!(String / "actor"))
         .and(with_resource(pool.clone()))
         .and_then(handle_did_actor_get);
     let route_did_actor_post = warp::post()
-        .and(warp::path!("did" / String / "actor"))
+        .and(warp::path!(String / "actor"))
         .and(warp::body::json())
         .and(with_resource(pool.clone()))
         .and_then(handle_did_actor_post);
@@ -528,7 +528,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -537,7 +537,7 @@ mod test {
         // second post returns status accepted
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -554,7 +554,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/did/did:example:a/actor/outbox")
+            .path("/did:example:a/actor/outbox")
             .json(&message)
             .reply(&api)
             .await;
@@ -574,7 +574,7 @@ mod test {
         message_2.id = Some(URI::from_str("id:a").unwrap());
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message_2)
             .reply(&api)
             .await;
@@ -598,7 +598,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -622,7 +622,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -646,7 +646,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/did/{}/actor/outbox", did))
+                .path(&format!("/{}/actor/outbox", did))
                 .json(&build_follow(&["tag:1", "tag:2"], &jwk).await)
                 .reply(&api)
                 .await
@@ -656,7 +656,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}/actor/following", did))
+            .path(&format!("/{}/actor/following", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -679,7 +679,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/did/{}/actor/outbox", did_1))
+                .path(&format!("/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
                         "id:1",
@@ -699,7 +699,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/did/{}/actor/outbox", did_1))
+                .path(&format!("/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
                         "id:2",
@@ -719,7 +719,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/did/{}/actor/outbox", did_1))
+                .path(&format!("/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
                         "id:3",
@@ -739,7 +739,7 @@ mod test {
         // did_1 sees only own content addressed to self because not following others
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}/actor/inbox", did_1))
+            .path(&format!("/{}/actor/inbox", did_1))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -758,7 +758,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/did/{}/actor/outbox", did_1))
+                .path(&format!("/{}/actor/outbox", did_1))
                 .json(&build_follow(&[&format!("{}/actor", did_2)], &jwk_1).await)
                 .reply(&api)
                 .await
@@ -768,7 +768,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}/actor/inbox", did_1))
+            .path(&format!("/{}/actor/inbox", did_1))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -792,7 +792,7 @@ mod test {
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}", did))
+            .path(&format!("/{}", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -823,7 +823,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -831,7 +831,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/object/{}", object_id))
+            .path(&format!("/{}", object_id))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -840,7 +840,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/object/{}", object_id))
+            .path(&format!("/{}", object_id))
             .json(&object)
             .reply(&api)
             .await;
@@ -848,7 +848,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/object/{}", object_id))
+            .path(&format!("/{}", object_id))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -871,7 +871,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -879,7 +879,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/object/id:wrong")
+            .path("/id:wrong")
             .json(&object)
             .reply(&api)
             .await;
@@ -889,7 +889,7 @@ mod test {
         object_invalid.members = Some(json!({"content": "abcd"}).as_object().unwrap().to_owned());
         let response = request()
             .method("POST")
-            .path(&format!("/object/{}", object_id))
+            .path(&format!("/{}", object_id))
             .json(&object_invalid)
             .reply(&api)
             .await;
@@ -900,11 +900,7 @@ mod test {
     async fn api_object_wont_get_unknown() {
         let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
         let api = build_api(pool);
-        let response = request()
-            .method("GET")
-            .path("/object/id:1")
-            .reply(&api)
-            .await;
+        let response = request().method("GET").path("/id:1").reply(&api).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -916,7 +912,7 @@ mod test {
         let object_id = object.id.as_ref().unwrap().as_str();
         let response = request()
             .method("POST")
-            .path(&format!("/object/{}", object_id))
+            .path(&format!("/{}", object_id))
             .json(&object)
             .reply(&api)
             .await;
@@ -945,7 +941,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -953,7 +949,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}/actor", did))
+            .path(&format!("/{}/actor", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -962,7 +958,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor", did))
+            .path(&format!("/{}/actor", did))
             .json(&actor)
             .reply(&api)
             .await;
@@ -970,7 +966,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/did/{}/actor", did))
+            .path(&format!("/{}/actor", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -1001,7 +997,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor/outbox", did))
+            .path(&format!("/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -1009,7 +1005,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/did/did:example:a/actor")
+            .path("/did:example:a/actor")
             .json(&actor)
             .reply(&api)
             .await;
@@ -1019,7 +1015,7 @@ mod test {
         actor_invalid.members = Some(json!({"name": "abcd"}).as_object().unwrap().to_owned());
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor", did))
+            .path(&format!("/{}/actor", did))
             .json(&actor_invalid)
             .reply(&api)
             .await;
@@ -1032,7 +1028,7 @@ mod test {
         let api = build_api(pool);
         let response = request()
             .method("GET")
-            .path("/did/did:example:a/actor")
+            .path("/did:example:a/actor")
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -1049,7 +1045,7 @@ mod test {
             .unwrap();
         let response = request()
             .method("POST")
-            .path(&format!("/did/{}/actor", did))
+            .path(&format!("/{}/actor", did))
             .json(&actor)
             .reply(&api)
             .await;
