@@ -5,6 +5,7 @@ use sqlx::Acquire;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
 use warp::http::StatusCode;
+use warp::hyper::Method;
 use warp::{Filter, Rejection};
 
 use crate::chatternet::activities::{
@@ -423,6 +424,11 @@ pub fn build_api(
         .and(warp::body::json())
         .and(with_resource(pool.clone()))
         .and_then(handle_did_actor_post);
+    let cors = warp::cors()
+        .allow_any_origin()
+        .allow_header("content-type")
+        .allow_methods(&[Method::GET, Method::POST, Method::OPTIONS]);
+    let log = warp::log("chatternet::api");
     route_version
         .or(route_did_outbox)
         .or(route_did_inbox)
@@ -433,6 +439,8 @@ pub fn build_api(
         .or(route_object_post)
         .or(route_did_actor_get)
         .or(route_did_actor_post)
+        .with(cors)
+        .with(log)
 }
 
 #[cfg(test)]
