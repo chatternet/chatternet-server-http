@@ -1,0 +1,299 @@
+use anyhow::{anyhow, Result};
+use did_method_key::DIDKey;
+use sqlx::Acquire;
+use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use warp::http::StatusCode;
+use warp::Rejection;
+
+use crate::chatternet::activities::{actor_id_from_did, Actor};
+use crate::db::{self, Connector};
+use crate::errors::Error;
+
+pub async fn handle_did_document(did: String) -> Result<impl warp::Reply, Rejection> {
+    let (_, document, _) = DIDKey
+        .resolve(&did, &ResolutionInputMetadata::default())
+        .await;
+    let document = document
+        .ok_or(anyhow!("unable to interpret DID"))
+        .map_err(Error)?;
+    Ok(warp::reply::json(&document))
+}
+
+pub async fn handle_did_actor_get(
+    did: String,
+    connector: Arc<RwLock<Connector>>,
+) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    // read only
+    let connector = connector.read().await;
+    let mut connection = connector.connection().await.map_err(Error)?;
+    if !db::has_object(&mut connection, &actor_id)
+        .await
+        .map_err(Error)?
+    {
+        Err(Error(anyhow!("requested actor is not known")))?;
+    }
+    let actor = db::get_object(&mut connection, &actor_id)
+        .await
+        .map_err(Error)?;
+    match actor {
+        Some(actor) => {
+            let actor: Actor = serde_json::from_str(&actor)
+                .map_err(|x| anyhow!(x))
+                .map_err(Error)?;
+            Ok(warp::reply::json(&actor))
+        }
+        None => Ok(warp::reply::json(&serde_json::Value::Null)),
+    }
+}
+
+pub async fn handle_did_actor_post(
+    did: String,
+    actor: Actor,
+    connector: Arc<RwLock<Connector>>,
+) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    // read write
+    let mut connector = connector.write().await;
+    let mut transaction = connector.transaction_mut().await.map_err(Error)?;
+    let connection = transaction
+        .acquire()
+        .await
+        .map_err(|x| anyhow!(x))
+        .map_err(Error)?;
+    if actor_id.as_str() != actor_id {
+        Err(Error(anyhow!("posted actor has wrong ID")))?;
+    }
+    if !db::has_object(connection, &actor_id).await.map_err(Error)? {
+        Err(Error(anyhow!("posted actor is not known")))?;
+    }
+    if !actor.verify().await.is_ok() {
+        Err(Error(anyhow!("posted actor ID contents are invalid")))?;
+    }
+    let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
+    db::put_or_update_object(connection, &actor_id, Some(&actor))
+        .await
+        .map_err(Error)?;
+    transaction
+        .commit()
+        .await
+        .map_err(|x| anyhow!(x))
+        .map_err(Error)?;
+    Ok(StatusCode::OK)
+}
+
+fn id_from_followers(followers_id: &str) -> Result<String> {
+    let (id, path) = followers_id
+        .split_once("/")
+        .ok_or(anyhow!("followers ID is not a path"))?;
+    if path != "followers" {
+        Err(anyhow!("followers ID is not a followers path"))?;
+    }
+    Ok(id.to_string())
+}
+
+pub async fn handle_did_following(
+    did: String,
+    connector: Arc<RwLock<Connector>>,
+) -> Result<impl warp::Reply, Rejection> {
+    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    // read only
+    let connector = connector.read().await;
+    let mut connection = connector.connection().await.map_err(Error)?;
+    let ids = db::get_actor_audiences(&mut *connection, &actor_id)
+        .await
+        .map_err(Error)?;
+    let ids = ids
+        .iter()
+        .map(|x| id_from_followers(x))
+        .collect::<Result<Vec<String>>>()
+        .map_err(Error)?;
+    Ok(warp::reply::json(&ids))
+}
+
+#[cfg(test)]
+mod test {
+    use serde_json::json;
+    use tokio;
+    use warp::{http::StatusCode, test::request};
+
+    use crate::chatternet::activities::{Actor, ActorType};
+    use crate::chatternet::didkey;
+    use crate::db::Connector;
+
+    use super::super::build_api;
+    use super::super::test::build_message;
+    use super::*;
+
+    const NO_VEC: Option<&Vec<String>> = None;
+
+    #[tokio::test]
+    async fn api_did_document_build_document() {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let response = request()
+            .method("GET")
+            .path(&format!("/{}", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let document: serde_json::Value = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(
+            document
+                .as_object()
+                .unwrap()
+                .get("id")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            did
+        );
+    }
+
+    #[tokio::test]
+    async fn api_actor_updates_and_gets() {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
+
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+
+        let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
+        let actor = Actor::new(
+            did.to_string(),
+            ActorType::Person,
+            Some(members),
+            Some(&jwk),
+        )
+        .await
+        .unwrap();
+        let actor_id = actor.id.as_str();
+        let message = build_message(actor_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+
+        let response = request()
+            .method("POST")
+            .path(&format!("/{}/actor/outbox", did))
+            .json(&message)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/{}/actor", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let actor_back: Option<Actor> = serde_json::from_slice(response.body()).unwrap();
+        assert!(actor_back.is_none());
+
+        let response = request()
+            .method("POST")
+            .path(&format!("/{}/actor", did))
+            .json(&actor)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/{}/actor", did))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let actor_back: Option<Actor> = serde_json::from_slice(response.body()).unwrap();
+        let actor_back = actor_back.unwrap();
+        assert_eq!(actor_back.id, actor.id);
+    }
+
+    #[tokio::test]
+    async fn api_actor_wont_update_invalid_actor() {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
+
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+
+        let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
+        let actor = Actor::new(
+            did.to_string(),
+            ActorType::Person,
+            Some(members),
+            Some(&jwk),
+        )
+        .await
+        .unwrap();
+        let actor_id = actor.id.as_str();
+        let message = build_message(actor_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+
+        let response = request()
+            .method("POST")
+            .path(&format!("/{}/actor/outbox", did))
+            .json(&message)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = request()
+            .method("POST")
+            .path("/did:example:a/actor")
+            .json(&actor)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let mut actor_invalid = actor.clone();
+        actor_invalid.members = Some(json!({"name": "abcd"}).as_object().unwrap().to_owned());
+        let response = request()
+            .method("POST")
+            .path(&format!("/{}/actor", did))
+            .json(&actor_invalid)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn api_actor_wont_get_unknown() {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
+        let response = request()
+            .method("GET")
+            .path("/did:example:a/actor")
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn api_actor_wont_post_unknown() {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let actor = Actor::new(did.to_string(), ActorType::Person, None, None)
+            .await
+            .unwrap();
+        let response = request()
+            .method("POST")
+            .path(&format!("/{}/actor", did))
+            .json(&actor)
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}

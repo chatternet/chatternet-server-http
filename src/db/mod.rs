@@ -6,9 +6,6 @@ use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Acquire, Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 
-pub type Connection = SqliteConnection;
-pub type Pool = SqlitePool;
-
 mod actor_audience;
 mod contact;
 mod message;
@@ -80,7 +77,7 @@ pub async fn get_inbox_for_actor(
  * But both provide a read-write connection to the underlying database.
  */
 pub struct Connector {
-    pool: Pool,
+    pool: SqlitePool,
 }
 
 impl Connector {
