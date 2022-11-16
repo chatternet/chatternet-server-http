@@ -3,9 +3,10 @@ use std::sync::Arc;
 use anyhow::Result;
 use clap::Parser;
 use tokio;
+use tokio::sync::RwLock;
 use warp;
 
-use chatternet_server_http::db::new_pool;
+use chatternet_server_http::db::Connector;
 use chatternet_server_http::handlers::build_api;
 
 #[derive(Parser, Debug)]
@@ -20,8 +21,8 @@ struct Args {
 async fn main() -> Result<()> {
     pretty_env_logger::init();
     let args = Args::parse();
-    let pool = Arc::new(new_pool("sqlite::memory:").await?);
-    let routes = build_api(pool);
+    let connector = Arc::new(RwLock::new(Connector::new("sqlite::memory:").await?));
+    let routes = build_api(connector);
     let address = if args.loopback {
         [127, 0, 0, 1]
     } else {

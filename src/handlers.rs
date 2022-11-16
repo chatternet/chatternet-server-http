@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Acquire;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use warp::http::StatusCode;
 use warp::hyper::Method;
 use warp::{Filter, Rejection};
@@ -11,7 +12,7 @@ use warp::{Filter, Rejection};
 use crate::chatternet::activities::{
     actor_id_from_did, ActivityType, Actor, Inbox, Message, Object,
 };
-use crate::db::{self, Connection, Pool};
+use crate::db::{self, Connection, Connector};
 use crate::errors::Error;
 
 fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
@@ -94,7 +95,7 @@ async fn handle_follow(message: &Message, connection: &mut Connection) -> Result
 async fn handle_did_outbox(
     did: String,
     message: Message,
-    pool: Arc<Pool>,
+    connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     if actor_id != message.actor.as_str() {
@@ -102,7 +103,8 @@ async fn handle_did_outbox(
     }
 
     // read write
-    let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
+    let mut connector = connector.write().await;
+    let mut transaction = connector.transaction_mut().await.map_err(Error)?;
     let connection = transaction
         .acquire()
         .await
@@ -171,15 +173,12 @@ struct DidInboxQuery {
 async fn handle_did_inbox(
     did: String,
     query: Option<DidInboxQuery>,
-    pool: Arc<Pool>,
+    connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     // read only
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+    let connector = connector.read().await;
+    let mut connection = connector.connection().await.map_err(Error)?;
     let after = query.as_ref().map(|x| x.after.as_str());
     let messages = db::get_inbox_for_actor(
         &mut connection,
@@ -208,14 +207,14 @@ fn id_from_followers(followers_id: &str) -> Result<String> {
     Ok(id.to_string())
 }
 
-async fn handle_did_following(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
+async fn handle_did_following(
+    did: String,
+    connector: Arc<RwLock<Connector>>,
+) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     // read only
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+    let connector = connector.read().await;
+    let mut connection = connector.connection().await.map_err(Error)?;
     let ids = db::get_actor_audiences(&mut *connection, &actor_id)
         .await
         .map_err(Error)?;
@@ -239,14 +238,11 @@ async fn handle_did_document(did: String) -> Result<impl warp::Reply, Rejection>
 
 async fn handle_object_get(
     object_id: String,
-    pool: Arc<Pool>,
+    connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
     // read only
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+    let connector = connector.read().await;
+    let mut connection = connector.connection().await.map_err(Error)?;
     if !db::has_object(&mut connection, &object_id)
         .await
         .map_err(Error)?
@@ -270,11 +266,12 @@ async fn handle_object_get(
 async fn handle_object_post(
     object_id: String,
     object: Object,
-    pool: Arc<Pool>,
+    connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
     // read write
-    let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
-    let mut connection = transaction
+    let mut connector = connector.write().await;
+    let mut transaction = connector.transaction_mut().await.map_err(Error)?;
+    let connection = transaction
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
@@ -288,7 +285,7 @@ async fn handle_object_post(
     {
         Err(Error(anyhow!("posted object has wrong ID")))?;
     }
-    if !db::has_object(&mut connection, &object_id)
+    if !db::has_object(connection, &object_id)
         .await
         .map_err(Error)?
     {
@@ -298,7 +295,7 @@ async fn handle_object_post(
         Err(Error(anyhow!("posted object ID doesn't match contents")))?;
     }
     let object = serde_json::to_string(&object).map_err(|x| Error(anyhow!(x)))?;
-    db::put_or_update_object(&mut connection, &object_id, Some(&object))
+    db::put_or_update_object(connection, &object_id, Some(&object))
         .await
         .map_err(Error)?;
     transaction
@@ -309,14 +306,14 @@ async fn handle_object_post(
     Ok(StatusCode::OK)
 }
 
-async fn handle_did_actor_get(did: String, pool: Arc<Pool>) -> Result<impl warp::Reply, Rejection> {
+async fn handle_did_actor_get(
+    did: String,
+    connector: Arc<RwLock<Connector>>,
+) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     // read only
-    let mut connection = pool
-        .acquire()
-        .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+    let connector = connector.read().await;
+    let mut connection = connector.connection().await.map_err(Error)?;
     if !db::has_object(&mut connection, &actor_id)
         .await
         .map_err(Error)?
@@ -340,12 +337,13 @@ async fn handle_did_actor_get(did: String, pool: Arc<Pool>) -> Result<impl warp:
 async fn handle_did_actor_post(
     did: String,
     actor: Actor,
-    pool: Arc<Pool>,
+    connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(Error)?;
     // read write
-    let mut transaction = pool.begin().await.map_err(|x| anyhow!(x)).map_err(Error)?;
-    let mut connection = transaction
+    let mut connector = connector.write().await;
+    let mut transaction = connector.transaction_mut().await.map_err(Error)?;
+    let connection = transaction
         .acquire()
         .await
         .map_err(|x| anyhow!(x))
@@ -353,17 +351,14 @@ async fn handle_did_actor_post(
     if actor_id.as_str() != actor_id {
         Err(Error(anyhow!("posted actor has wrong ID")))?;
     }
-    if !db::has_object(&mut connection, &actor_id)
-        .await
-        .map_err(Error)?
-    {
+    if !db::has_object(connection, &actor_id).await.map_err(Error)? {
         Err(Error(anyhow!("posted actor is not known")))?;
     }
     if !actor.verify().await.is_ok() {
         Err(Error(anyhow!("posted actor ID contents are invalid")))?;
     }
     let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
-    db::put_or_update_object(&mut connection, &actor_id, Some(&actor))
+    db::put_or_update_object(connection, &actor_id, Some(&actor))
         .await
         .map_err(Error)?;
     transaction
@@ -381,48 +376,48 @@ fn with_resource<T: Clone + Send>(
 }
 
 pub fn build_api(
-    pool: Arc<Pool>,
+    connector: Arc<RwLock<Connector>>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = Rejection> + Clone {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
     let route_did_outbox = warp::post()
         .and(warp::path!(String / "actor" / "outbox"))
         .and(warp::body::json())
-        .and(with_resource(pool.clone()))
+        .and(with_resource(connector.clone()))
         .and_then(handle_did_outbox);
     let route_did_inbox = warp::get()
         .and(warp::path!(String / "actor" / "inbox"))
-        .and(with_resource(pool.clone()))
-        .and_then(|did, pool| handle_did_inbox(did, None, pool));
+        .and(with_resource(connector.clone()))
+        .and_then(|did, connector| handle_did_inbox(did, None, connector));
     let route_did_inbox_query = warp::get()
         .and(warp::path!(String / "actor" / "inbox"))
         .and(warp::query::<DidInboxQuery>())
-        .and(with_resource(pool.clone()))
-        .and_then(|did, query, pool| handle_did_inbox(did, Some(query), pool));
+        .and(with_resource(connector.clone()))
+        .and_then(|did, query, connector| handle_did_inbox(did, Some(query), connector));
     let route_did_following = warp::get()
         .and(warp::path!(String / "actor" / "following"))
-        .and(with_resource(pool.clone()))
+        .and(with_resource(connector.clone()))
         .and_then(handle_did_following);
     let route_did_document = warp::get()
         .and(warp::path!(String))
         .and_then(handle_did_document);
     let route_object_get = warp::get()
         .and(warp::path!(String))
-        .and(with_resource(pool.clone()))
+        .and(with_resource(connector.clone()))
         .and_then(handle_object_get);
     let route_object_post = warp::post()
         .and(warp::path!(String))
         .and(warp::body::json())
-        .and(with_resource(pool.clone()))
+        .and(with_resource(connector.clone()))
         .and_then(handle_object_post);
     let route_did_actor_get = warp::get()
         .and(warp::path!(String / "actor"))
-        .and(with_resource(pool.clone()))
+        .and(with_resource(connector.clone()))
         .and_then(handle_did_actor_get);
     let route_did_actor_post = warp::post()
         .and(warp::path!(String / "actor"))
         .and(warp::body::json())
-        .and(with_resource(pool.clone()))
+        .and(with_resource(connector.clone()))
         .and_then(handle_did_actor_post);
     let cors = warp::cors()
         .allow_any_origin()
@@ -456,7 +451,7 @@ mod test {
 
     use crate::chatternet::activities::{ActivityType, ActorType, Message, ObjectType};
     use crate::chatternet::didkey;
-    use crate::db::new_pool;
+    use crate::db::Connector;
 
     use super::*;
 
@@ -517,8 +512,10 @@ mod test {
 
     #[tokio::test]
     async fn api_handles_version() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request().method("GET").path("/version").reply(&api).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -527,8 +524,10 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_handles_message() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -554,8 +553,10 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_wrong_did() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
@@ -571,8 +572,10 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_invalid_message() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -591,8 +594,10 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_with_bcc() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -615,8 +620,10 @@ mod test {
 
     #[tokio::test]
     async fn api_outbox_rejects_with_bto() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -645,8 +652,10 @@ mod test {
     }
     #[tokio::test]
     async fn api_outbox_handles_follow() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -674,8 +683,10 @@ mod test {
 
     #[tokio::test]
     async fn api_inbox_returns_messages() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
@@ -794,8 +805,10 @@ mod test {
 
     #[tokio::test]
     async fn api_did_document_build_document() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let response = request()
@@ -819,8 +832,10 @@ mod test {
 
     #[tokio::test]
     async fn api_object_updates_and_gets() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -867,8 +882,10 @@ mod test {
 
     #[tokio::test]
     async fn api_object_wont_update_invalid_object() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -906,16 +923,20 @@ mod test {
 
     #[tokio::test]
     async fn api_object_wont_get_unknown() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
         let response = request().method("GET").path("/id:1").reply(&api).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
     async fn api_object_wont_post_unknown() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
         let object = Object::new(ObjectType::Note, None).await.unwrap();
         let object_id = object.id.as_ref().unwrap().as_str();
         let response = request()
@@ -929,8 +950,10 @@ mod test {
 
     #[tokio::test]
     async fn api_actor_updates_and_gets() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -985,8 +1008,10 @@ mod test {
 
     #[tokio::test]
     async fn api_actor_wont_update_invalid_actor() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -1032,8 +1057,10 @@ mod test {
 
     #[tokio::test]
     async fn api_actor_wont_get_unknown() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
         let response = request()
             .method("GET")
             .path("/did:example:a/actor")
@@ -1044,8 +1071,10 @@ mod test {
 
     #[tokio::test]
     async fn api_actor_wont_post_unknown() {
-        let pool = Arc::new(new_pool("sqlite::memory:").await.unwrap());
-        let api = build_api(pool);
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector);
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let actor = Actor::new(did.to_string(), ActorType::Person, None, None)

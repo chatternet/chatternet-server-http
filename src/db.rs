@@ -1,10 +1,13 @@
-use anyhow::{anyhow, Result};
+use std::str::FromStr;
+
+use anyhow::{Error, Result};
 /// Serialize to and from text and bytes formats. Leave further casting to
 /// the caller. In some instances a serialized format is preferred, so don't
 /// force casting into the interface.
 use futures::TryStreamExt;
-use sqlx::sqlite::SqlitePoolOptions;
-use sqlx::{Acquire, Row, SqliteConnection, SqlitePool};
+use sqlx::pool::PoolConnection;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::{Acquire, Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 pub type Connection = SqliteConnection;
 pub type Pool = SqlitePool;
@@ -417,20 +420,45 @@ pub async fn get_object(connection: &mut Connection, object_id: &str) -> Result<
     .get("object"))
 }
 
-pub async fn new_pool(url: &str) -> Result<Pool> {
-    let pool = SqlitePoolOptions::new()
-        .connect(url)
-        .await
-        .map_err(|x| anyhow!(x))?;
-    let mut transaction = pool.begin().await?;
-    let connection = transaction.acquire().await?;
-    create_messages(connection).await?;
-    create_messages_audiences(connection).await?;
-    create_actors_audiences(connection).await?;
-    create_actors_contacts(connection).await?;
-    create_objects(connection).await?;
-    transaction.commit().await?;
-    Ok(pool)
+/**
+ * Provides connections to a DB instance.
+ * 
+ * Provides mutable and immutable borrow methods to help with book keeping.
+ * But both provide a read-write connection to the underlying database.
+ */
+pub struct Connector {
+    pool: Pool,
+}
+
+impl Connector {
+    pub async fn new(url: &str) -> Result<Self> {
+        let pool = SqlitePoolOptions::new()
+            .connect_with(SqliteConnectOptions::from_str(url)?.read_only(false))
+            .await?;
+
+        let mut transaction = pool.begin().await?;
+        let connection = transaction.acquire().await?;
+        create_messages(connection).await?;
+        create_messages_audiences(connection).await?;
+        create_actors_audiences(connection).await?;
+        create_actors_contacts(connection).await?;
+        create_objects(connection).await?;
+        transaction.commit().await?;
+
+        Ok(Connector { pool })
+    }
+
+    pub async fn connection(&self) -> Result<PoolConnection<Sqlite>> {
+        Ok(self.pool.acquire().await?)
+    }
+
+    pub async fn connection_mut(&mut self) -> Result<PoolConnection<Sqlite>> {
+        Ok(self.pool.acquire().await?)
+    }
+
+    pub async fn transaction_mut(&mut self) -> Result<Transaction<Sqlite>> {
+        self.pool.begin().await.map_err(Error::new)
+    }
 }
 
 #[cfg(test)]
@@ -440,14 +468,9 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn new_pool_is_ok() {
-        let _ = new_pool("sqlite::memory:").await.unwrap();
-    }
-
-    #[tokio::test]
     async fn puts_and_has_message() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
         put_message(&mut connection, "message", "id:1", "did:1/actor")
             .await
             .unwrap();
@@ -461,8 +484,8 @@ mod test {
 
     #[tokio::test]
     async fn puts_and_gets_actor_audiences() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
         put_actor_audience(&mut connection, "did:1/actor", "did:2/actor/followers")
             .await
             .unwrap();
@@ -488,8 +511,8 @@ mod test {
 
     #[tokio::test]
     async fn puts_and_gets_actor_contacts() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
         put_actor_contact(&mut connection, "did:1/actor", "did:2/actor")
             .await
             .unwrap();
@@ -515,8 +538,8 @@ mod test {
 
     #[tokio::test]
     async fn puts_and_gets_message_audiences() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
         put_message_audience(&mut connection, "id:1", "did:2/actor/followers")
             .await
             .unwrap();
@@ -542,8 +565,8 @@ mod test {
 
     #[tokio::test]
     async fn db_gets_inbox_for_actor() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
 
         put_message(&mut connection, "message 1", "id:1", "did:1/actor")
             .await
@@ -631,8 +654,8 @@ mod test {
 
     #[tokio::test]
     async fn db_puts_and_gets_an_object() {
-        let pool = new_pool("sqlite::memory:").await.unwrap();
-        let mut connection = pool.acquire().await.unwrap();
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
         put_or_update_object(&mut connection, "id:1", None)
             .await
             .unwrap();
