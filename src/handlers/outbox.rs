@@ -5,9 +5,9 @@ use tokio::sync::RwLock;
 use warp::http::StatusCode;
 use warp::Rejection;
 
+use super::error::Error;
 use crate::chatternet::activities::{actor_id_from_did, ActivityType, Message};
 use crate::db::{self, Connector};
-use crate::errors::Error;
 
 pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
     if message
@@ -67,13 +67,18 @@ pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
     Ok(chained.collect())
 }
 
-async fn handle_follow(message: &Message, connection: &mut SqliteConnection) -> Result<()> {
+async fn handle_follow(
+    message: &Message,
+    connection: &mut SqliteConnection,
+) -> Result<(), Rejection> {
     let actor_id = message.actor.as_str();
     let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
         // following a did, it as a contact for filtering
         if object_id.starts_with("did:") {
-            db::put_actor_contact(&mut *connection, &actor_id, &object_id).await?;
+            db::put_actor_contact(&mut *connection, &actor_id, &object_id)
+                .await
+                .map_err(|_| Error::DbQueryFailed)?;
         }
         // following any id, add to its followers collection
         db::put_actor_audience(
@@ -81,7 +86,8 @@ async fn handle_follow(message: &Message, connection: &mut SqliteConnection) -> 
             &actor_id,
             &format!("{}/followers", object_id),
         )
-        .await?;
+        .await
+        .map_err(|_| Error::DbQueryFailed)?;
     }
     Ok(())
 }
@@ -91,25 +97,27 @@ pub async fn handle_did_outbox(
     message: Message,
     connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     if actor_id != message.actor.as_str() {
-        Err(anyhow!("posting to the wrong outbox for the message actor")).map_err(Error)?;
+        Err(Error::ActorIdWrong)?;
     }
 
     // read write
     let mut connector = connector.write().await;
-    let mut transaction = connector.transaction_mut().await.map_err(Error)?;
+    let mut transaction = connector
+        .transaction_mut()
+        .await
+        .map_err(|_| Error::DbConnectionFailed)?;
     let connection = transaction
         .acquire()
         .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+        .map_err(|_| Error::DbConnectionFailed)?;
 
     // if already known, take no actions
-    let message_id = message.verify().await.map_err(Error)?;
+    let message_id = message.verify().await.map_err(|_| Error::MessageNotValid)?;
     if db::has_message(&mut *connection, &message_id)
         .await
-        .map_err(Error)?
+        .map_err(|_| Error::DbQueryFailed)?
     {
         return Ok(StatusCode::ACCEPTED);
     };
@@ -117,18 +125,16 @@ pub async fn handle_did_outbox(
     // run type-dependent side effects
     match message.message_type {
         // activity expresses a follow relationship
-        ActivityType::Follow => handle_follow(&message, &mut *connection)
-            .await
-            .map_err(Error)?,
+        ActivityType::Follow => handle_follow(&message, &mut *connection).await?,
         _ => (),
     }
 
     // store this message id for its audiences
-    let audiences_id = build_audiences_id(&message).map_err(Error)?;
+    let audiences_id = build_audiences_id(&message).map_err(|_| Error::MessageNotValid)?;
     for audience_id in audiences_id {
         db::put_message_audience(&mut *connection, &message_id, &audience_id)
             .await
-            .map_err(Error)?;
+            .map_err(|_| Error::DbQueryFailed)?;
     }
 
     // create empty objects in the DB which can be updated later
@@ -136,25 +142,24 @@ pub async fn handle_did_outbox(
     for object_id in objects_id {
         db::put_or_update_object(&mut *connection, object_id, None)
             .await
-            .map_err(Error)?;
+            .map_err(|_| Error::DbQueryFailed)?;
     }
 
     // create an empty object for the actor which can be updated later
     db::put_or_update_object(&mut *connection, message.actor.as_str(), None)
         .await
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
 
     // store the message itself
-    let message = serde_json::to_string(&message).map_err(|x| Error(anyhow!(x)))?;
+    let message = serde_json::to_string(&message).map_err(|_| Error::MessageNotValid)?;
     db::put_message(&mut *connection, &message, &message_id, &actor_id)
         .await
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
 
     transaction
         .commit()
         .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
 
     Ok(StatusCode::OK)
 }
@@ -246,7 +251,7 @@ mod test {
             .json(&message)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -268,7 +273,7 @@ mod test {
             .json(&message_2)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -294,7 +299,7 @@ mod test {
             .json(&message)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -320,7 +325,7 @@ mod test {
             .json(&message)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

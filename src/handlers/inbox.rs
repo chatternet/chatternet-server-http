@@ -1,12 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Error as AnyError, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::Rejection;
 
+use super::error::Error;
 use crate::chatternet::activities::{actor_id_from_did, Inbox, Message};
 use crate::db::{self, Connector};
-use crate::errors::Error;
 
 #[derive(Deserialize, Serialize)]
 pub struct DidInboxQuery {
@@ -18,10 +18,13 @@ pub async fn handle_did_inbox(
     query: Option<DidInboxQuery>,
     connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     // read only
     let connector = connector.read().await;
-    let mut connection = connector.connection().await.map_err(Error)?;
+    let mut connection = connector
+        .connection()
+        .await
+        .map_err(|_| Error::DbConnectionFailed)?;
     let after = query.as_ref().map(|x| x.after.as_str());
     let messages = db::get_inbox_for_actor(
         &mut connection,
@@ -30,13 +33,13 @@ pub async fn handle_did_inbox(
         query.as_ref().map(|x| x.after.as_str()),
     )
     .await
-    .map_err(Error)?;
+    .map_err(|_| Error::DbQueryFailed)?;
     let messages = messages
         .iter()
-        .map(|x| serde_json::from_str(x).map_err(|x| anyhow!(x)))
+        .map(|x| serde_json::from_str(x).map_err(AnyError::new))
         .collect::<Result<Vec<Message>>>()
-        .map_err(Error)?;
-    let inbox = Inbox::new(&actor_id, messages, after).map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
+    let inbox = Inbox::new(&actor_id, messages, after).map_err(|_| Error::DbQueryFailed)?;
     Ok(warp::reply::json(&inbox))
 }
 

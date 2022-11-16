@@ -1,16 +1,21 @@
+use serde::Serialize;
+use std::convert::Infallible;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use warp::hyper::StatusCode;
 use warp::{filters::BoxedFilter, hyper::Method};
-use warp::{Filter, Reply};
+use warp::{Filter, Rejection, Reply};
 
 use crate::db::Connector;
 
 mod actor;
+mod error;
 mod inbox;
 mod object;
 mod outbox;
 
 use actor::*;
+use error::Error;
 use inbox::*;
 use object::*;
 use outbox::*;
@@ -19,6 +24,68 @@ pub fn with_resource<T: Clone + Send>(
     x: T,
 ) -> impl Filter<Extract = (T,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || x.clone())
+}
+
+#[derive(Serialize)]
+pub struct ErrorMessage {
+    code: u16,
+    message: String,
+}
+
+async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
+    let code;
+    let message;
+
+    if let Some(Error::DbConnectionFailed) = err.find() {
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "failed to connect to database";
+    } else if let Some(Error::DbQueryFailed) = err.find() {
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "failed to communicate with database";
+    } else if let Some(Error::DidNotValid) = err.find() {
+        code = StatusCode::BAD_REQUEST;
+        message = "query DID is invalid";
+    } else if let Some(Error::ActorNotKnown) = err.find() {
+        code = StatusCode::NOT_FOUND;
+        message = "actor not known";
+    } else if let Some(Error::ActorNotValid) = err.find() {
+        code = StatusCode::BAD_REQUEST;
+        message = "actor data is invalid";
+    } else if let Some(Error::ActorIdWrong) = err.find() {
+        code = StatusCode::BAD_REQUEST;
+        message = "wrong actor for the resource";
+    } else if let Some(Error::ObjectNotKnown) = err.find() {
+        code = StatusCode::NOT_FOUND;
+        message = "object not known";
+    } else if let Some(Error::ObjectNotValid) = err.find() {
+        code = StatusCode::BAD_REQUEST;
+        message = "object data is invalid";
+    } else if let Some(Error::ObjectIdWrong) = err.find() {
+        code = StatusCode::BAD_REQUEST;
+        message = "wrong object for the resource";
+    } else if let Some(Error::MessageNotValid) = err.find() {
+        code = StatusCode::BAD_REQUEST;
+        message = "message data is invalid";
+    } else if err.is_not_found() {
+        code = StatusCode::NOT_FOUND;
+        message = "resource no found";
+    } else if let Some(_) = err.find::<warp::filters::body::BodyDeserializeError>() {
+        message = "post body data is invalid";
+        code = StatusCode::BAD_REQUEST;
+    } else if let Some(_) = err.find::<warp::reject::MethodNotAllowed>() {
+        code = StatusCode::METHOD_NOT_ALLOWED;
+        message = "method not allowed for resource";
+    } else {
+        code = StatusCode::INTERNAL_SERVER_ERROR;
+        message = "request caused an unexpected error";
+    }
+
+    let json = warp::reply::json(&ErrorMessage {
+        code: code.as_u16(),
+        message: message.into(),
+    });
+
+    Ok(warp::reply::with_status(json, code))
 }
 
 pub fn build_api(connector: Arc<RwLock<Connector>>) -> BoxedFilter<(impl Reply,)> {
@@ -73,7 +140,9 @@ pub fn build_api(connector: Arc<RwLock<Connector>>) -> BoxedFilter<(impl Reply,)
         .allow_any_origin()
         .allow_header("content-type")
         .allow_methods(&[Method::GET, Method::POST, Method::OPTIONS]);
+
     let log = warp::log("chatternet::api");
+
     route_version
         .or(route_did_outbox)
         .or(route_did_inbox)
@@ -84,6 +153,7 @@ pub fn build_api(connector: Arc<RwLock<Connector>>) -> BoxedFilter<(impl Reply,)
         .or(route_did_actor_post)
         .or(route_object_get)
         .or(route_object_post)
+        .recover(handle_rejection)
         .with(cors)
         .with(log)
         .boxed()

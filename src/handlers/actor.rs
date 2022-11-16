@@ -7,17 +7,15 @@ use tokio::sync::RwLock;
 use warp::http::StatusCode;
 use warp::Rejection;
 
+use super::error::Error;
 use crate::chatternet::activities::{actor_id_from_did, Actor};
 use crate::db::{self, Connector};
-use crate::errors::Error;
 
 pub async fn handle_did_document(did: String) -> Result<impl warp::Reply, Rejection> {
     let (_, document, _) = DIDKey
         .resolve(&did, &ResolutionInputMetadata::default())
         .await;
-    let document = document
-        .ok_or(anyhow!("unable to interpret DID"))
-        .map_err(Error)?;
+    let document = document.ok_or(Error::DidNotValid)?;
     Ok(warp::reply::json(&document))
 }
 
@@ -25,24 +23,25 @@ pub async fn handle_did_actor_get(
     did: String,
     connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     // read only
     let connector = connector.read().await;
-    let mut connection = connector.connection().await.map_err(Error)?;
+    let mut connection = connector
+        .connection()
+        .await
+        .map_err(|_| Error::DbConnectionFailed)?;
     if !db::has_object(&mut connection, &actor_id)
         .await
-        .map_err(Error)?
+        .map_err(|_| Error::DbQueryFailed)?
     {
-        Err(Error(anyhow!("requested actor is not known")))?;
+        Err(Error::ActorNotKnown)?;
     }
     let actor = db::get_object(&mut connection, &actor_id)
         .await
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
     match actor {
         Some(actor) => {
-            let actor: Actor = serde_json::from_str(&actor)
-                .map_err(|x| anyhow!(x))
-                .map_err(Error)?;
+            let actor: Actor = serde_json::from_str(&actor).map_err(|_| Error::ActorNotValid)?;
             Ok(warp::reply::json(&actor))
         }
         None => Ok(warp::reply::json(&serde_json::Value::Null)),
@@ -54,33 +53,37 @@ pub async fn handle_did_actor_post(
     actor: Actor,
     connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     // read write
     let mut connector = connector.write().await;
-    let mut transaction = connector.transaction_mut().await.map_err(Error)?;
+    let mut transaction = connector
+        .transaction_mut()
+        .await
+        .map_err(|_| Error::DbConnectionFailed)?;
     let connection = transaction
         .acquire()
         .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+        .map_err(|_| Error::DbConnectionFailed)?;
     if actor_id.as_str() != actor_id {
-        Err(Error(anyhow!("posted actor has wrong ID")))?;
+        Err(Error::ActorIdWrong)?;
     }
-    if !db::has_object(connection, &actor_id).await.map_err(Error)? {
-        Err(Error(anyhow!("posted actor is not known")))?;
+    if !db::has_object(connection, &actor_id)
+        .await
+        .map_err(|_| Error::DbQueryFailed)?
+    {
+        Err(Error::ActorNotKnown)?;
     }
     if !actor.verify().await.is_ok() {
-        Err(Error(anyhow!("posted actor ID contents are invalid")))?;
+        Err(Error::ActorNotValid)?;
     }
-    let actor = serde_json::to_string(&actor).map_err(|x| Error(anyhow!(x)))?;
+    let actor = serde_json::to_string(&actor).map_err(|_| Error::ActorNotValid)?;
     db::put_or_update_object(connection, &actor_id, Some(&actor))
         .await
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
     transaction
         .commit()
         .await
-        .map_err(|x| anyhow!(x))
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
     Ok(StatusCode::OK)
 }
 
@@ -98,18 +101,21 @@ pub async fn handle_did_following(
     did: String,
     connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
-    let actor_id = actor_id_from_did(&did).map_err(Error)?;
+    let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     // read only
     let connector = connector.read().await;
-    let mut connection = connector.connection().await.map_err(Error)?;
+    let mut connection = connector
+        .connection()
+        .await
+        .map_err(|_| Error::DbConnectionFailed)?;
     let ids = db::get_actor_audiences(&mut *connection, &actor_id)
         .await
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
     let ids = ids
         .iter()
         .map(|x| id_from_followers(x))
         .collect::<Result<Vec<String>>>()
-        .map_err(Error)?;
+        .map_err(|_| Error::DbQueryFailed)?;
     Ok(warp::reply::json(&ids))
 }
 
@@ -250,7 +256,7 @@ mod test {
             .json(&actor)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let mut actor_invalid = actor.clone();
         actor_invalid.members = Some(json!({"name": "abcd"}).as_object().unwrap().to_owned());
@@ -260,7 +266,7 @@ mod test {
             .json(&actor_invalid)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -274,7 +280,7 @@ mod test {
             .path("/did:example:a/actor")
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -294,6 +300,6 @@ mod test {
             .json(&actor)
             .reply(&api)
             .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
