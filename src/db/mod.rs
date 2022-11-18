@@ -4,7 +4,7 @@ use anyhow::Result;
 use futures::TryStreamExt;
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Acquire, Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
+use sqlx::{Acquire, Row, Sqlite, SqliteConnection, SqlitePool};
 
 mod actor_audience;
 mod contact;
@@ -104,10 +104,6 @@ impl Connector {
 
     pub async fn connection_mut(&mut self) -> Result<PoolConnection<Sqlite>> {
         Ok(self.pool.acquire().await?)
-    }
-
-    pub async fn transaction_mut(&mut self) -> Result<Transaction<Sqlite>> {
-        Ok(self.pool.begin().await?)
     }
 }
 

@@ -1,5 +1,4 @@
 use anyhow::Result;
-use sqlx::Acquire;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::http::StatusCode;
@@ -45,12 +44,8 @@ pub async fn handle_object_post(
 ) -> Result<impl warp::Reply, Rejection> {
     // read write
     let mut connector = connector.write().await;
-    let mut transaction = connector
-        .transaction_mut()
-        .await
-        .map_err(|_| Error::DbConnectionFailed)?;
-    let connection = transaction
-        .acquire()
+    let mut connection = connector
+        .connection_mut()
         .await
         .map_err(|_| Error::DbConnectionFailed)?;
     if object_id.is_empty()
@@ -62,7 +57,7 @@ pub async fn handle_object_post(
     {
         Err(Error::ObjectIdWrong)?;
     }
-    if !db::has_object(connection, &object_id)
+    if !db::has_object(&mut *connection, &object_id)
         .await
         .map_err(|_| Error::DbQueryFailed)?
     {
@@ -72,11 +67,7 @@ pub async fn handle_object_post(
         Err(Error::ObjectNotValid)?;
     }
     let object = serde_json::to_string(&object).map_err(|_| Error::ObjectNotValid)?;
-    db::put_or_update_object(connection, &object_id, Some(&object))
-        .await
-        .map_err(|_| Error::DbQueryFailed)?;
-    transaction
-        .commit()
+    db::put_or_update_object(&mut *connection, &object_id, Some(&object))
         .await
         .map_err(|_| Error::DbQueryFailed)?;
     Ok(StatusCode::OK)

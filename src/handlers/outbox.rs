@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use sqlx::{Acquire, SqliteConnection};
+use sqlx::SqliteConnection;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use warp::http::StatusCode;
@@ -104,12 +104,8 @@ pub async fn handle_did_outbox(
 
     // read write
     let mut connector = connector.write().await;
-    let mut transaction = connector
-        .transaction_mut()
-        .await
-        .map_err(|_| Error::DbConnectionFailed)?;
-    let connection = transaction
-        .acquire()
+    let mut connection = connector
+        .connection_mut()
         .await
         .map_err(|_| Error::DbConnectionFailed)?;
 
@@ -153,11 +149,6 @@ pub async fn handle_did_outbox(
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|_| Error::MessageNotValid)?;
     db::put_message(&mut *connection, &message, &message_id, &actor_id)
-        .await
-        .map_err(|_| Error::DbQueryFailed)?;
-
-    transaction
-        .commit()
         .await
         .map_err(|_| Error::DbQueryFailed)?;
 

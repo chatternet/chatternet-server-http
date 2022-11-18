@@ -1,6 +1,5 @@
 use anyhow::{anyhow, Result};
 use did_method_key::DIDKey;
-use sqlx::Acquire;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -56,18 +55,14 @@ pub async fn handle_did_actor_post(
     let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     // read write
     let mut connector = connector.write().await;
-    let mut transaction = connector
-        .transaction_mut()
-        .await
-        .map_err(|_| Error::DbConnectionFailed)?;
-    let connection = transaction
-        .acquire()
+    let mut connection = connector
+        .connection_mut()
         .await
         .map_err(|_| Error::DbConnectionFailed)?;
     if actor_id.as_str() != actor_id {
         Err(Error::ActorIdWrong)?;
     }
-    if !db::has_object(connection, &actor_id)
+    if !db::has_object(&mut *connection, &actor_id)
         .await
         .map_err(|_| Error::DbQueryFailed)?
     {
@@ -77,11 +72,7 @@ pub async fn handle_did_actor_post(
         Err(Error::ActorNotValid)?;
     }
     let actor = serde_json::to_string(&actor).map_err(|_| Error::ActorNotValid)?;
-    db::put_or_update_object(connection, &actor_id, Some(&actor))
-        .await
-        .map_err(|_| Error::DbQueryFailed)?;
-    transaction
-        .commit()
+    db::put_or_update_object(&mut *connection, &actor_id, Some(&actor))
         .await
         .map_err(|_| Error::DbQueryFailed)?;
     Ok(StatusCode::OK)
