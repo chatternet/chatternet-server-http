@@ -12,5 +12,6 @@ pub enum Error {
     ObjectNotValid,
     ObjectIdWrong,
     MessageNotValid,
+    IdWrong,
 }
 impl Reject for Error {}

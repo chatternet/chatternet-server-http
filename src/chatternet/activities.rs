@@ -429,35 +429,50 @@ impl Message {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum InboxType {
+pub enum CollectionType {
+    Collection,
     OrderedCollection,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Inbox {
+pub struct Collection<T> {
     #[serde(rename = "@context")]
     pub context: Vec<String>,
     pub id: URI,
     #[serde(rename = "type")]
-    pub inbox_type: InboxType,
-    pub ordered_items: Vec<Message>,
+    pub collection_type: CollectionType,
+    pub items: Vec<T>,
 }
 
-impl Inbox {
-    pub fn new(actor_id: &str, messages: Vec<Message>, after: Option<&str>) -> Result<Self> {
-        let id = match after {
-            Some(after) => format!("{}/inbox?after={}", actor_id, after),
-            None => format!("{}/inbox", actor_id),
-        };
-        let id = URI::try_from(id)?;
-        Ok(Inbox {
+impl<T> Collection<T> {
+    pub fn new(id: &str, collection_type: CollectionType, items: Vec<T>) -> Result<Self> {
+        let id = URI::from_str(id)?;
+        Ok(Collection {
             context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
             id,
-            inbox_type: InboxType::OrderedCollection,
-            ordered_items: messages,
+            collection_type,
+            items,
         })
     }
+}
+
+pub fn new_inbox(
+    actor_id: &str,
+    messages: Vec<Message>,
+    after: Option<&str>,
+) -> Result<Collection<Message>> {
+    let id = match after {
+        Some(after) => format!("{}/inbox?after={}", actor_id, after),
+        None => format!("{}/inbox", actor_id),
+    };
+    let id = URI::try_from(id)?;
+    Ok(Collection {
+        context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+        id,
+        collection_type: CollectionType::OrderedCollection,
+        items: messages,
+    })
 }
 
 #[async_trait]
@@ -682,6 +697,14 @@ mod test {
     }
 
     #[tokio::test]
+    async fn builds_collection() {
+        let collection =
+            Collection::new("id:a", CollectionType::Collection, vec!["abc", "def"]).unwrap();
+        assert_eq!(collection.items[0], "abc");
+        assert_eq!(collection.items[1], "def");
+    }
+
+    #[tokio::test]
     async fn builds_inbox() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -689,12 +712,12 @@ mod test {
             .await
             .unwrap();
         let message_id = message.id.clone();
-        let inbox = Inbox::new("did:example:a", Vec::new(), None).unwrap();
+        let inbox = new_inbox("did:example:a", Vec::new(), None).unwrap();
         assert_eq!(inbox.id.as_str(), "did:example:a/inbox");
-        let inbox = Inbox::new("did:example:a", Vec::new(), Some("id:1")).unwrap();
+        let inbox = new_inbox("did:example:a", Vec::new(), Some("id:1")).unwrap();
         assert_eq!(inbox.id.as_str(), "did:example:a/inbox?after=id:1");
-        let inbox = Inbox::new("did:example:a", vec![message], Some("id:1")).unwrap();
+        let inbox = new_inbox("did:example:a", vec![message], Some("id:1")).unwrap();
         assert_eq!(inbox.id.as_str(), "did:example:a/inbox?after=id:1");
-        assert_eq!(inbox.ordered_items[0].id, message_id);
+        assert_eq!(inbox.items[0].id, message_id);
     }
 }

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use did_method_key::DIDKey;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use std::sync::Arc;
@@ -7,7 +7,7 @@ use warp::http::StatusCode;
 use warp::Rejection;
 
 use super::error::Error;
-use crate::chatternet::activities::{actor_id_from_did, Actor};
+use crate::chatternet::activities::{actor_id_from_did, Actor, Collection, CollectionType};
 use crate::db::{self, Connector};
 
 pub async fn handle_did_document(did: String) -> Result<impl warp::Reply, Rejection> {
@@ -78,16 +78,6 @@ pub async fn handle_did_actor_post(
     Ok(StatusCode::OK)
 }
 
-fn id_from_followers(followers_id: &str) -> Result<String> {
-    let (id, path) = followers_id
-        .split_once("/")
-        .ok_or(anyhow!("followers ID is not a path"))?;
-    if path != "followers" {
-        Err(anyhow!("followers ID is not a followers path"))?;
-    }
-    Ok(id.to_string())
-}
-
 pub async fn handle_did_following(
     did: String,
     connector: Arc<RwLock<Connector>>,
@@ -99,15 +89,23 @@ pub async fn handle_did_following(
         .connection()
         .await
         .map_err(|_| Error::DbConnectionFailed)?;
-    let ids = db::get_actor_audiences(&mut *connection, &actor_id)
-        .await
-        .map_err(|_| Error::DbQueryFailed)?;
-    let ids = ids
-        .iter()
-        .map(|x| id_from_followers(x))
-        .collect::<Result<Vec<String>>>()
-        .map_err(|_| Error::DbQueryFailed)?;
-    Ok(warp::reply::json(&ids))
+    let ids = {
+        let mut ids = db::get_actor_audiences(&mut *connection, &actor_id)
+            .await
+            .map_err(|_| Error::DbQueryFailed)?;
+        let mut ids_contact = db::get_actor_contacts(&mut *connection, &actor_id)
+            .await
+            .map_err(|_| Error::DbQueryFailed)?;
+        ids.append(&mut ids_contact);
+        ids
+    };
+    let following = Collection::new(
+        &format!("{}/following", actor_id),
+        CollectionType::Collection,
+        ids,
+    )
+    .map_err(|_| Error::DbQueryFailed)?;
+    Ok(warp::reply::json(&following))
 }
 
 #[cfg(test)]

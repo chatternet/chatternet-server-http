@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 use warp::Rejection;
 
 use super::error::Error;
-use crate::chatternet::activities::{actor_id_from_did, Inbox, Message};
+use crate::chatternet::activities::{actor_id_from_did, new_inbox, Message};
 use crate::db::{self, Connector};
 
 #[derive(Deserialize, Serialize)]
@@ -39,7 +39,8 @@ pub async fn handle_did_inbox(
         .map(|x| serde_json::from_str(x).map_err(AnyError::new))
         .collect::<Result<Vec<Message>>>()
         .map_err(|_| Error::DbQueryFailed)?;
-    let inbox = Inbox::new(&actor_id, messages, after).map_err(|_| Error::DbQueryFailed)?;
+    let inbox =
+        new_inbox(&format!("{}/inbox", actor_id), messages, after).map_err(|_| Error::IdWrong)?;
     Ok(warp::reply::json(&inbox))
 }
 
@@ -48,7 +49,7 @@ mod test {
     use tokio;
     use warp::{http::StatusCode, test::request};
 
-    use crate::chatternet::activities::Inbox;
+    use crate::chatternet::activities::Collection;
     use crate::chatternet::didkey;
     use crate::db::Connector;
 
@@ -139,10 +140,10 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let inbox: Inbox = serde_json::from_slice(response.body()).unwrap();
+        let inbox: Collection<Message> = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
             inbox
-                .ordered_items
+                .items
                 .iter()
                 .map(|x| x.object.iter().map(|x| x.as_str()))
                 .flatten()
@@ -168,10 +169,10 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let inbox: Inbox = serde_json::from_slice(response.body()).unwrap();
+        let inbox: Collection<Message> = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(
             inbox
-                .ordered_items
+                .items
                 .iter()
                 .map(|x| x.object.iter().map(|x| x.as_str()))
                 .flatten()

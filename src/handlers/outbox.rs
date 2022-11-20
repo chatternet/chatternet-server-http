@@ -173,6 +173,7 @@ mod test {
     use tokio;
     use warp::{http::StatusCode, test::request};
 
+    use crate::chatternet::activities::Collection;
     use crate::chatternet::didkey;
     use crate::db::Connector;
 
@@ -330,7 +331,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_outbox_handles_follow() {
+    async fn api_outbox_handles_follow_get_gets_following() {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
@@ -356,7 +357,39 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let ids: Vec<String> = serde_json::from_slice(response.body()).unwrap();
-        assert_eq!(ids, ["tag:1", "tag:2"]);
+        let following: Collection<String> = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(following.items, ["tag:1/followers", "tag:2/followers"]);
+    }
+
+    #[tokio::test]
+    async fn api_outbox_follows_actor() {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let api = build_api(connector, "did:example:server".to_string());
+
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+
+        assert_eq!(
+            request()
+                .method("POST")
+                .path(&format!("/{}/actor/outbox", did))
+                .json(&message)
+                .reply(&api)
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        let response = request()
+            .method("GET")
+            .path("/did:example:server/actor/following")
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let following: Collection<String> = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(following.items, [format!("{}/actor", did)]);
     }
 }
