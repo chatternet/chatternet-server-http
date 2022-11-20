@@ -88,7 +88,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     Ok(warp::reply::with_status(json, code))
 }
 
-pub fn build_api(connector: Arc<RwLock<Connector>>) -> BoxedFilter<(impl Reply,)> {
+pub fn build_api(connector: Arc<RwLock<Connector>>, did: String) -> BoxedFilter<(impl Reply,)> {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
 
@@ -96,6 +96,7 @@ pub fn build_api(connector: Arc<RwLock<Connector>>) -> BoxedFilter<(impl Reply,)
         .and(warp::path!(String / "actor" / "outbox"))
         .and(warp::body::json())
         .and(with_resource(connector.clone()))
+        .and(with_resource(did))
         .and_then(handle_did_outbox);
 
     let route_did_inbox = warp::get()
@@ -213,7 +214,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         let response = request().method("GET").path("/version").reply(&api).await;
         assert_eq!(response.status(), StatusCode::OK);

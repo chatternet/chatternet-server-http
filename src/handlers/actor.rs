@@ -131,7 +131,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let response = request()
@@ -158,7 +158,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -216,7 +216,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -265,7 +265,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
         let response = request()
             .method("GET")
             .path("/did:example:a/actor")
@@ -279,7 +279,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let actor = Actor::new(did.to_string(), ActorType::Person, None, None)

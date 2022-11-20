@@ -93,7 +93,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -143,7 +143,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -184,7 +184,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
         let response = request().method("GET").path("/id:1").reply(&api).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
@@ -194,7 +194,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
         let object = Object::new(ObjectType::Note, None).await.unwrap();
         let object_id = object.id.as_ref().unwrap().as_str();
         let response = request()

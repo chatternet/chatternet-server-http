@@ -63,7 +63,7 @@ mod test {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        let api = build_api(connector);
+        let api = build_api(connector, "did:example:server".to_string());
 
         let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
