@@ -53,7 +53,11 @@ pub fn uri_from_cid(cid: Cid) -> Result<URI> {
 }
 
 pub fn cid_from_uri(uri: &URI) -> Result<Cid> {
-    Ok(Cid::try_from(&uri.as_str()[8..])?)
+    let uri_str = uri.as_str();
+    if uri_str.len() < 8 {
+        Err(anyhow!("URI does not contain a CID"))?;
+    }
+    Ok(Cid::try_from(&uri_str[8..])?)
 }
 
 pub fn actor_id_from_did(did: &str) -> Result<String> {
@@ -383,10 +387,10 @@ impl Message {
             proof: None,
             members,
         };
+        message.proof = Some(build_proof(&message, &actor_did, jwk).await?);
         message.id = Some(
             uri_from_cid(cid_from_json(&message, &mut new_context_loader(), None).await?).unwrap(),
         );
-        message.proof = Some(build_proof(&message, &actor_did, jwk).await?);
         Ok(message)
     }
 
@@ -396,6 +400,15 @@ impl Message {
             .get_default_proof_purpose()
             .ok_or(anyhow!("message has no proof purpose"))?;
         let actor_did = did_from_actor_id(message.actor.as_str())?;
+        let id = message
+            .id
+            .take()
+            .ok_or(anyhow!("message does not contain an ID"))?;
+        let cid_message = cid_from_uri(&id)?;
+        let cid_data = cid_from_json(&message, &mut new_context_loader(), None).await?;
+        if cid_message.hash().digest() != cid_data.hash().digest() {
+            return Err(anyhow!("message ID does not match its contents"));
+        }
         let proof = message
             .proof
             .take()
@@ -413,15 +426,6 @@ impl Message {
             }
         };
         LinkedDataProofs::verify(&proof, &message, &DIDKey, &mut new_context_loader()).await?;
-        let id = message
-            .id
-            .take()
-            .ok_or(anyhow!("message does not contain an ID"))?;
-        let cid_message = cid_from_uri(&id)?;
-        let cid_data = cid_from_json(&message, &mut new_context_loader(), None).await?;
-        if cid_message.hash().digest() != cid_data.hash().digest() {
-            return Err(anyhow!("message ID does not match its contents"));
-        }
         message.id = Some(id.clone());
         message.proof = Some(proof);
         Ok(id.to_string())
@@ -659,8 +663,7 @@ mod test {
         let mut message = Message::new(&did, &["id:a"], ActivityType::Create, None, None, &jwk)
             .await
             .unwrap();
-        message.id = Some(URI::from_str("a:b").unwrap());
-        message.proof = Some(build_proof(&message, &did, &jwk).await.unwrap());
+        message.id = Some(URI::from_str("urn:cid:a").unwrap());
         message.verify().await.unwrap_err();
     }
 
