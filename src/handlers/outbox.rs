@@ -235,6 +235,18 @@ mod test {
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+        let response = request()
+            .method("GET")
+            .path(&format!("/{}", &message.id.as_ref().unwrap().as_str()))
+            .reply(&api)
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let message_back: Option<Message> = serde_json::from_slice(response.body()).unwrap();
+        assert_eq!(
+            serde_json::to_string(&message).unwrap(),
+            serde_json::to_string(&message_back.unwrap()).unwrap()
+        );
     }
 
     #[tokio::test]

@@ -5,7 +5,7 @@ use warp::http::StatusCode;
 use warp::Rejection;
 
 use super::error::Error;
-use crate::chatternet::activities::Object;
+use crate::chatternet::activities::{Message, Object};
 use crate::db::{self, Connector};
 
 pub async fn handle_object_get(
@@ -18,23 +18,44 @@ pub async fn handle_object_get(
         .connection()
         .await
         .map_err(|_| Error::DbConnectionFailed)?;
-    if !db::has_object(&mut connection, &object_id)
+
+    if db::has_object(&mut connection, &object_id)
         .await
         .map_err(|_| Error::DbQueryFailed)?
     {
-        Err(Error::ObjectNotKnown)?;
-    }
-    let object = db::get_object(&mut connection, &object_id)
-        .await
-        .map_err(|_| Error::DbQueryFailed)?;
-    match object {
-        Some(object) => {
-            let object: Object =
-                serde_json::from_str(&object).map_err(|_| Error::ObjectNotValid)?;
-            Ok(warp::reply::json(&object))
+        let object = db::get_object(&mut connection, &object_id)
+            .await
+            .map_err(|_| Error::DbQueryFailed)?;
+        match object {
+            Some(object) => {
+                let object: Object =
+                    serde_json::from_str(&object).map_err(|_| Error::ObjectNotValid)?;
+                return Ok(warp::reply::json(&object));
+            }
+            None => {
+                return Ok(warp::reply::json(&serde_json::Value::Null));
+            }
         }
-        None => Ok(warp::reply::json(&serde_json::Value::Null)),
+    } else if db::has_message(&mut connection, &object_id)
+        .await
+        .map_err(|_| Error::DbQueryFailed)?
+    {
+        let object = db::get_message(&mut connection, &object_id)
+            .await
+            .map_err(|_| Error::DbQueryFailed)?;
+        match object {
+            Some(object) => {
+                let object: Message =
+                    serde_json::from_str(&object).map_err(|_| Error::MessageNotValid)?;
+                return Ok(warp::reply::json(&object));
+            }
+            None => {
+                return Ok(warp::reply::json(&serde_json::Value::Null));
+            }
+        }
     }
+
+    Err(Error::ObjectNotKnown)?
 }
 
 pub async fn handle_object_post(

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::SqliteConnection;
+use sqlx::{Row, SqliteConnection};
 
 pub async fn create_messages(connection: &mut SqliteConnection) -> Result<()> {
     sqlx::query(
@@ -67,6 +67,22 @@ pub async fn has_message(connection: &mut SqliteConnection, id: &str) -> Result<
     Ok(query.fetch_optional(&mut *connection).await?.is_some())
 }
 
+pub async fn get_message(
+    connection: &mut SqliteConnection,
+    message_id: &str,
+) -> Result<Option<String>> {
+    Ok(sqlx::query(
+        "\
+        SELECT `message` FROM `Messages` \
+        WHERE `message_id` = $1;\
+        ",
+    )
+    .bind(message_id)
+    .fetch_one(connection)
+    .await?
+    .get("message"))
+}
+
 #[cfg(test)]
 mod test {
     use tokio;
@@ -78,14 +94,18 @@ mod test {
     async fn puts_and_has_message() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
-        put_message(&mut connection, "message", "id:1", "did:1/actor")
+        put_message(&mut connection, "message 1", "id:1", "did:1/actor")
             .await
             .unwrap();
-        put_message(&mut connection, "message", "id:2", "did:1/actor")
+        put_message(&mut connection, "message 2", "id:2", "did:1/actor")
             .await
             .unwrap();
         assert!(has_message(&mut connection, "id:1").await.unwrap());
         assert!(has_message(&mut connection, "id:2").await.unwrap());
         assert!(!has_message(&mut connection, "id:3").await.unwrap());
+        assert_eq!(
+            get_message(&mut connection, "id:2").await.unwrap(),
+            Some("message 2".to_string())
+        );
     }
 }
