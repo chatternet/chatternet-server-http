@@ -4,7 +4,7 @@ use anyhow::Result;
 use futures::TryStreamExt;
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Acquire, Row, Sqlite, SqliteConnection, SqlitePool};
+use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
 
 mod actor_audience;
 mod contact;
@@ -70,40 +70,59 @@ pub async fn get_inbox_for_actor(
     Ok(messages)
 }
 
-/**
- * Provides connections to a DB instance.
- *
- * Provides mutable and immutable borrow methods to help with book keeping.
- * But both provide a read-write connection to the underlying database.
- */
 pub struct Connector {
-    pool: SqlitePool,
+    pool_read: Option<SqlitePool>,
+    pool_write: SqlitePool,
 }
 
 impl Connector {
     pub async fn new(url: &str) -> Result<Self> {
-        let pool = SqlitePoolOptions::new()
-            .connect_with(SqliteConnectOptions::from_str(url)?.read_only(false))
+        let pool_write = SqlitePoolOptions::new()
+            .connect_with(
+                SqliteConnectOptions::from_str(url)?
+                    .create_if_missing(true)
+                    .read_only(false),
+            )
             .await?;
 
-        let mut transaction = pool.begin().await?;
-        let connection = transaction.acquire().await?;
-        create_messages(connection).await?;
-        create_messages_audiences(connection).await?;
-        create_actors_audiences(connection).await?;
-        create_actors_contacts(connection).await?;
-        create_objects(connection).await?;
-        transaction.commit().await?;
+        let mut connection = pool_write.acquire().await?;
+        create_messages(&mut *connection).await?;
+        create_messages_audiences(&mut *connection).await?;
+        create_actors_audiences(&mut *connection).await?;
+        create_actors_contacts(&mut *connection).await?;
+        create_objects(&mut *connection).await?;
 
-        Ok(Connector { pool })
+        let pool_read = if url == "sqlite::memory:" {
+            None
+        } else {
+            Some(
+                SqlitePoolOptions::new()
+                    .connect_with(
+                        SqliteConnectOptions::from_str(url)?
+                            .create_if_missing(false)
+                            .read_only(true),
+                    )
+                    .await?,
+            )
+        };
+
+        Ok(Connector {
+            pool_read,
+            pool_write,
+        })
     }
 
     pub async fn connection(&self) -> Result<PoolConnection<Sqlite>> {
-        Ok(self.pool.acquire().await?)
+        Ok(self
+            .pool_read
+            .as_ref()
+            .unwrap_or(&self.pool_write)
+            .acquire()
+            .await?)
     }
 
     pub async fn connection_mut(&mut self) -> Result<PoolConnection<Sqlite>> {
-        Ok(self.pool.acquire().await?)
+        Ok(self.pool_write.acquire().await?)
     }
 }
 
