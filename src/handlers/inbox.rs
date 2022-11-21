@@ -10,12 +10,13 @@ use crate::db::{self, Connector};
 
 #[derive(Deserialize, Serialize)]
 pub struct DidInboxQuery {
-    after: String,
+    after: Option<String>,
+    all_interests: Option<bool>,
 }
 
 pub async fn handle_did_inbox(
     did: String,
-    query: Option<DidInboxQuery>,
+    query: DidInboxQuery,
     connector: Arc<RwLock<Connector>>,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
@@ -25,15 +26,10 @@ pub async fn handle_did_inbox(
         .connection()
         .await
         .map_err(|_| Error::DbConnectionFailed)?;
-    let after = query.as_ref().map(|x| x.after.as_str());
-    let messages = db::get_inbox_for_actor(
-        &mut connection,
-        &actor_id,
-        32,
-        query.as_ref().map(|x| x.after.as_str()),
-    )
-    .await
-    .map_err(|_| Error::DbQueryFailed)?;
+    let after = query.after.as_ref().map(|x| x.as_str());
+    let messages = db::get_inbox_for_actor(&mut connection, &actor_id, 32, false, after)
+        .await
+        .map_err(|_| Error::DbQueryFailed)?;
     let messages = messages
         .iter()
         .map(|x| serde_json::from_str(x).map_err(AnyError::new))
