@@ -22,7 +22,6 @@ pub async fn get_inbox_for_actor(
     connection: &mut SqliteConnection,
     actor_id: &str,
     count: i64,
-    all_interests: bool,
     after: Option<&str>,
 ) -> Result<Vec<String>> {
     let query_str_1: &'static str = "\
@@ -34,9 +33,6 @@ pub async fn get_inbox_for_actor(
                 WHERE `ActorsContacts`.`actor_id` = $1
             )\
         )\
-        ";
-    let query_str_2: &'static str = if !all_interests {
-        "\
         AND `message_id` IN (\
             SELECT `message_id` FROM `MessagesAudiences` \
             WHERE `MessagesAudiences`.`audience_id` = $1
@@ -45,31 +41,25 @@ pub async fn get_inbox_for_actor(
                 WHERE `ActorsAudiences`.`actor_id` = $1
             )\
         ) \
-        "
-    } else {
-        ""
-    };
-    let query_str_3: &'static str = "\
+        ";
+    let query_str_2: &'static str = "\
         ORDER BY `idx` DESC
         LIMIT $2;\
         ";
-    let query_str_4: &'static str = "\
+    let query_str_3: &'static str = "\
         AND `idx` < (\
             SELECT `idx` FROM `Messages` \
             WHERE `message_id` = $3\
         ) \
         ";
-    let query_str_1_2_3: String = format!("{}{}{}", query_str_1, query_str_2, query_str_3);
-    let query_str_1_2_4_3: String = format!(
-        "{}{}{}{}",
-        query_str_1, query_str_2, query_str_4, query_str_3
-    );
+    let query_str_1_2: String = format!("{}{}", query_str_1, query_str_2);
+    let query_str_1_3_2: String = format!("{}{}{}", query_str_1, query_str_3, query_str_2);
     let query = match after {
-        Some(after) => sqlx::query(&query_str_1_2_4_3)
+        Some(after) => sqlx::query(&query_str_1_3_2)
             .bind(actor_id)
             .bind(count)
             .bind(after),
-        None => sqlx::query(&query_str_1_2_3).bind(actor_id).bind(count),
+        None => sqlx::query(&query_str_1_2).bind(actor_id).bind(count),
     };
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
@@ -174,7 +164,7 @@ mod test {
 
         // did:1 gets messages addressed to self
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, false, None)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
                 .await
                 .unwrap(),
             ["message 1"]
@@ -185,7 +175,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, false, None)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
                 .await
                 .unwrap(),
             ["message 2", "message 1"]
@@ -197,7 +187,7 @@ mod test {
             .unwrap();
         // but not a contact of did:2 so can't get messages
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 1, false, None)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 1, None)
                 .await
                 .unwrap(),
             ["message 2"]
@@ -208,7 +198,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, false, None)
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
                 .await
                 .unwrap(),
             ["message 3", "message 2", "message 1"]
@@ -216,7 +206,7 @@ mod test {
 
         // can paginate
         assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, false, Some("id:3"))
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some("id:3"))
                 .await
                 .unwrap(),
             ["message 2", "message 1"]
@@ -224,7 +214,7 @@ mod test {
 
         // can paginate empty
         assert!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, false, Some("id:1"))
+            get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some("id:1"))
                 .await
                 .unwrap()
                 .is_empty()

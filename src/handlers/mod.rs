@@ -101,9 +101,13 @@ pub fn build_api(connector: Arc<RwLock<Connector>>, did: String) -> BoxedFilter<
 
     let route_did_inbox = warp::get()
         .and(warp::path!(String / "actor" / "inbox"))
+        .and(with_resource(connector.clone()))
+        .and_then(|did, connector| handle_did_inbox(did, None, connector));
+    let route_did_inbox_query = warp::get()
+        .and(warp::path!(String / "actor" / "inbox"))
         .and(warp::query::<DidInboxQuery>())
         .and(with_resource(connector.clone()))
-        .and_then(|did, query, connector| handle_did_inbox(did, query, connector));
+        .and_then(|did, query, connector| handle_did_inbox(did, Some(query), connector));
 
     let route_did_following = warp::get()
         .and(warp::path!(String / "actor" / "following"))
@@ -143,6 +147,7 @@ pub fn build_api(connector: Arc<RwLock<Connector>>, did: String) -> BoxedFilter<
     route_version
         .or(route_did_outbox)
         .or(route_did_inbox)
+        .or(route_did_inbox_query)
         .or(route_did_following)
         .or(route_did_document)
         .or(route_did_actor_get)
