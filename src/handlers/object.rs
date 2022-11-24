@@ -125,7 +125,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -133,7 +133,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}", object_id))
+            .path(&format!("/ap/{}", object_id))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -142,7 +142,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}", object_id))
+            .path(&format!("/ap/{}", object_id))
             .json(&object)
             .reply(&api)
             .await;
@@ -150,7 +150,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}", object_id))
+            .path(&format!("/ap/{}", object_id))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -175,7 +175,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -183,7 +183,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/id:wrong")
+            .path("/ap/id:wrong")
             .json(&object)
             .reply(&api)
             .await;
@@ -193,7 +193,7 @@ mod test {
         object_invalid.members = Some(json!({"content": "abcd"}).as_object().unwrap().to_owned());
         let response = request()
             .method("POST")
-            .path(&format!("/{}", object_id))
+            .path(&format!("/ap/{}", object_id))
             .json(&object_invalid)
             .reply(&api)
             .await;
@@ -206,7 +206,7 @@ mod test {
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
         let api = build_api(connector, "did:example:server".to_string());
-        let response = request().method("GET").path("/id:1").reply(&api).await;
+        let response = request().method("GET").path("/ap/id:1").reply(&api).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
@@ -220,7 +220,7 @@ mod test {
         let object_id = object.id.as_ref().unwrap().as_str();
         let response = request()
             .method("POST")
-            .path(&format!("/{}", object_id))
+            .path(&format!("/ap/{}", object_id))
             .json(&object)
             .reply(&api)
             .await;

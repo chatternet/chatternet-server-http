@@ -71,7 +71,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/{}/actor/outbox", did_1))
+                .path(&format!("/ap/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
                         "id:1",
@@ -91,7 +91,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/{}/actor/outbox", did_1))
+                .path(&format!("/ap/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
                         "id:2",
@@ -111,7 +111,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/{}/actor/outbox", did_1))
+                .path(&format!("/ap/{}/actor/outbox", did_1))
                 .json(
                     &build_message(
                         "id:3",
@@ -131,7 +131,7 @@ mod test {
         // did_1 sees only own content addressed to self because not following others
         let response = request()
             .method("GET")
-            .path(&format!("/{}/actor/inbox", did_1))
+            .path(&format!("/ap/{}/actor/inbox", did_1))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -150,7 +150,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/{}/actor/outbox", did_1))
+                .path(&format!("/ap/{}/actor/outbox", did_1))
                 .json(&build_follow(&[&format!("{}/actor", did_2)], &jwk_1).await)
                 .reply(&api)
                 .await
@@ -160,7 +160,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}/actor/inbox", did_1))
+            .path(&format!("/ap/{}/actor/inbox", did_1))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);

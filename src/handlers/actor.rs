@@ -134,7 +134,7 @@ mod test {
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let response = request()
             .method("GET")
-            .path(&format!("/{}", did))
+            .path(&format!("/ap/{}", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -175,7 +175,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -183,7 +183,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}/actor", did))
+            .path(&format!("/ap/{}/actor", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -192,7 +192,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor", did))
+            .path(&format!("/ap/{}/actor", did))
             .json(&actor)
             .reply(&api)
             .await;
@@ -200,7 +200,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}/actor", did))
+            .path(&format!("/ap/{}/actor", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -233,7 +233,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -241,7 +241,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/did:example:a/actor")
+            .path("/ap/did:example:a/actor")
             .json(&actor)
             .reply(&api)
             .await;
@@ -251,7 +251,7 @@ mod test {
         actor_invalid.members = Some(json!({"name": "abcd"}).as_object().unwrap().to_owned());
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor", did))
+            .path(&format!("/ap/{}/actor", did))
             .json(&actor_invalid)
             .reply(&api)
             .await;
@@ -266,7 +266,7 @@ mod test {
         let api = build_api(connector, "did:example:server".to_string());
         let response = request()
             .method("GET")
-            .path("/did:example:a/actor")
+            .path("/ap/did:example:a/actor")
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -285,7 +285,7 @@ mod test {
             .unwrap();
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor", did))
+            .path(&format!("/ap/{}/actor", did))
             .json(&actor)
             .reply(&api)
             .await;

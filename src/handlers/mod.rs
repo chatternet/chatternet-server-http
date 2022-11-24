@@ -90,45 +90,47 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
 
 pub fn build_api(connector: Arc<RwLock<Connector>>, did: String) -> BoxedFilter<(impl Reply,)> {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
-    let route_version = warp::get().and(warp::path("version")).map(|| VERSION);
+    let route_version = warp::get()
+        .and(warp::path!("ap" / "version"))
+        .map(|| VERSION);
 
     let route_did_outbox = warp::post()
-        .and(warp::path!(String / "actor" / "outbox"))
+        .and(warp::path!("ap" / String / "actor" / "outbox"))
         .and(warp::body::json())
         .and(with_resource(connector.clone()))
         .and(with_resource(did))
         .and_then(handle_did_outbox);
 
     let route_did_inbox = warp::get()
-        .and(warp::path!(String / "actor" / "inbox"))
+        .and(warp::path!("ap" / String / "actor" / "inbox"))
         .and(warp::query::<DidInboxQuery>())
         .and(with_resource(connector.clone()))
         .and_then(|did, query, connector| handle_did_inbox(did, query, connector));
 
     let route_did_following = warp::get()
-        .and(warp::path!(String / "actor" / "following"))
+        .and(warp::path!("ap" / String / "actor" / "following"))
         .and(with_resource(connector.clone()))
         .and_then(handle_did_following);
 
     let route_did_document = warp::get()
-        .and(warp::path!(String))
+        .and(warp::path!("ap" / String))
         .and_then(handle_did_document);
     let route_did_actor_get = warp::get()
-        .and(warp::path!(String / "actor"))
+        .and(warp::path!("ap" / String / "actor"))
         .and(with_resource(connector.clone()))
         .and_then(handle_did_actor_get);
     let route_did_actor_post = warp::post()
-        .and(warp::path!(String / "actor"))
+        .and(warp::path!("ap" / String / "actor"))
         .and(warp::body::json())
         .and(with_resource(connector.clone()))
         .and_then(handle_did_actor_post);
 
     let route_object_get = warp::get()
-        .and(warp::path!(String))
+        .and(warp::path!("ap" / String))
         .and(with_resource(connector.clone()))
         .and_then(handle_object_get);
     let route_object_post = warp::post()
-        .and(warp::path!(String))
+        .and(warp::path!("ap" / String))
         .and(warp::body::json())
         .and(with_resource(connector.clone()))
         .and_then(handle_object_post);
@@ -211,7 +213,11 @@ mod test {
         ));
         let api = build_api(connector, "did:example:server".to_string());
         const VERSION: &str = env!("CARGO_PKG_VERSION");
-        let response = request().method("GET").path("/version").reply(&api).await;
+        let response = request()
+            .method("GET")
+            .path("/ap/version")
+            .reply(&api)
+            .await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.body(), VERSION);
     }

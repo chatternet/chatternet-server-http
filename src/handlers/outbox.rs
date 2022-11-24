@@ -233,7 +233,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -242,7 +242,7 @@ mod test {
         // second post returns status accepted
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -250,7 +250,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}", &message.id.as_ref().unwrap().as_str()))
+            .path(&format!("/ap/{}", &message.id.as_ref().unwrap().as_str()))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -273,7 +273,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path("/did:example:a/actor/outbox")
+            .path("/ap/did:example:a/actor/outbox")
             .json(&message)
             .reply(&api)
             .await;
@@ -295,7 +295,7 @@ mod test {
         message_2.id = Some(URI::from_str("id:a").unwrap());
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message_2)
             .reply(&api)
             .await;
@@ -321,7 +321,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -347,7 +347,7 @@ mod test {
 
         let response = request()
             .method("POST")
-            .path(&format!("/{}/actor/outbox", did))
+            .path(&format!("/ap/{}/actor/outbox", did))
             .json(&message)
             .reply(&api)
             .await;
@@ -367,7 +367,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/{}/actor/outbox", did))
+                .path(&format!("/ap/{}/actor/outbox", did))
                 .json(&build_follow(&["tag:1", "tag:2"], &jwk).await)
                 .reply(&api)
                 .await
@@ -377,7 +377,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path(&format!("/{}/actor/following", did))
+            .path(&format!("/ap/{}/actor/following", did))
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -406,7 +406,7 @@ mod test {
         assert_eq!(
             request()
                 .method("POST")
-                .path(&format!("/{}/actor/outbox", did))
+                .path(&format!("/ap/{}/actor/outbox", did))
                 .json(&message)
                 .reply(&api)
                 .await
@@ -416,7 +416,7 @@ mod test {
 
         let response = request()
             .method("GET")
-            .path("/did:example:server/actor/following")
+            .path("/ap/did:example:server/actor/following")
             .reply(&api)
             .await;
         assert_eq!(response.status(), StatusCode::OK);
