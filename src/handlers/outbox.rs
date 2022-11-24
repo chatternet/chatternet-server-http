@@ -96,7 +96,6 @@ pub async fn handle_did_outbox(
     did: String,
     message: Message,
     connector: Arc<RwLock<Connector>>,
-    server_did: String,
 ) -> Result<impl warp::Reply, Rejection> {
     let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
     if actor_id != message.actor.as_str() {
@@ -146,27 +145,6 @@ pub async fn handle_did_outbox(
     db::put_or_update_object(&mut *connection, message.actor.as_str(), None)
         .await
         .map_err(|_| Error::DbQueryFailed)?;
-
-    // server follows all actors
-    db::put_actor_contact(
-        &mut *connection,
-        &format!("{}/actor", server_did),
-        &format!("{}/actor", did),
-    )
-    .await
-    .map_err(|_| Error::DbQueryFailed)?;
-
-    // store joins all audiences
-    let audiences_id = build_audiences_id(&message).map_err(|_| Error::MessageNotValid)?;
-    for audience_id in audiences_id {
-        db::put_actor_audience(
-            &mut *connection,
-            &format!("{}/actor", server_did),
-            &audience_id,
-        )
-        .await
-        .map_err(|_| Error::DbQueryFailed)?;
-    }
 
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|_| Error::MessageNotValid)?;
@@ -383,48 +361,5 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let following: Collection<String> = serde_json::from_slice(response.body()).unwrap();
         assert_eq!(following.items, ["tag:1/followers", "tag:2/followers"]);
-    }
-
-    #[tokio::test]
-    async fn api_outbox_follows_actors_and_joins_audiences() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
-
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
-        let message = build_message(
-            "id:1",
-            Some(&["did:example:a/actor/followers"]),
-            NO_VEC,
-            NO_VEC,
-            &jwk,
-        )
-        .await;
-
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/ap/{}/actor/outbox", did))
-                .json(&message)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-
-        let response = request()
-            .method("GET")
-            .path("/ap/did:example:server/actor/following")
-            .reply(&api)
-            .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let following: Collection<String> = serde_json::from_slice(response.body()).unwrap();
-        assert_eq!(following.items.len(), 2);
-        assert!(following
-            .items
-            .contains(&"did:example:a/actor/followers".to_string()));
-        assert!(following.items.contains(&format!("{}/actor", did)));
     }
 }

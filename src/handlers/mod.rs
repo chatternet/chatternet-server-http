@@ -88,7 +88,7 @@ async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     Ok(warp::reply::with_status(json, code))
 }
 
-pub fn build_api(connector: Arc<RwLock<Connector>>, did: String) -> BoxedFilter<(impl Reply,)> {
+pub fn build_api(connector: Arc<RwLock<Connector>>, _did: String) -> BoxedFilter<(impl Reply,)> {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
     let route_version = warp::get()
         .and(warp::path!("ap" / "version"))
@@ -98,7 +98,6 @@ pub fn build_api(connector: Arc<RwLock<Connector>>, did: String) -> BoxedFilter<
         .and(warp::path!("ap" / String / "actor" / "outbox"))
         .and(warp::body::json())
         .and(with_resource(connector.clone()))
-        .and(with_resource(did))
         .and_then(handle_did_outbox);
 
     let route_did_inbox = warp::get()
