@@ -1,0 +1,5 @@
+#!/bin/bash
+echo "starting"
+cd /home/dh_3q3rw9/chatternet-server/
+screen -S chatternet-server -dm bash -c \
+    "RUST_LOG=chatternet_server_http,chatternet::api ./chatternet-server-http 8080 keys/key.json db.sqlite"
