@@ -5,6 +5,8 @@ use anyhow::Result;
 use chatternet_server_http::chatternet::didkey::{build_jwk, did_from_jwk};
 use clap::Parser;
 use log::info;
+use serde::Serialize;
+use serde_json;
 use tokio;
 use tokio::sync::RwLock;
 use warp;
@@ -24,6 +26,12 @@ struct Args {
     loopback: bool,
 }
 
+#[derive(Serialize)]
+struct ServerInfo {
+    url: String,
+    did: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     pretty_env_logger::init();
@@ -40,12 +48,24 @@ async fn main() -> Result<()> {
     let connector = Arc::new(RwLock::new(
         Connector::new(&format!("sqlite:{}", args.path_db)).await?,
     ));
-    let routes = build_api(connector, did);
+    let routes = build_api(connector, did.clone());
     let address = if args.loopback {
         [127, 0, 0, 1]
     } else {
         [0, 0, 0, 0]
     };
+
+    let host = address
+        .iter()
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>()
+        .join(".")
+        .to_string();
+    let url = "http://".to_string() + &host + ":" + &args.port.to_string() + "/ap";
+
+    let server_info = ServerInfo { url, did };
+    fs::write("server-info.json", serde_json::to_string(&server_info)?)?;
+
     warp::serve(routes).run((address, args.port)).await;
 
     Ok(())
