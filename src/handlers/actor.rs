@@ -68,16 +68,9 @@ pub async fn handle_actor_following(
         .connection()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
-    let ids = {
-        let mut ids = db::get_actor_audiences(&mut *connection, &actor_id)
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
-        let mut ids_contact = db::get_actor_contacts(&mut *connection, &actor_id)
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
-        ids.append(&mut ids_contact);
-        ids
-    };
+    let ids = db::get_actor_followings(&mut *connection, &actor_id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
     let following = Collection::new(
         &format!("{}/following", actor_id),
         CollectionType::Collection,

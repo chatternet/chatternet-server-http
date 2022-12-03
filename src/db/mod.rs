@@ -7,13 +7,13 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
 
 mod actor_audience;
-mod contact;
+mod following;
 mod message;
 mod message_audience;
 mod object;
 
 pub use actor_audience::*;
-pub use contact::*;
+pub use following::*;
 pub use message::*;
 pub use message_audience::*;
 pub use object::*;
@@ -32,8 +32,8 @@ pub async fn get_inbox_for_actor(
         WHERE (\
             `Messages`.`actor_id` = $1
             OR `Messages`.`actor_id` IN (\
-                SELECT `contact_id` FROM `ActorsContacts` \
-                WHERE `ActorsContacts`.`actor_id` = $1
+                SELECT `following_id` FROM `ActorsFollowings` \
+                WHERE `ActorsFollowings`.`actor_id` = $1
             )\
         )\
         AND `Messages`.`message_id` IN (\
@@ -94,7 +94,7 @@ impl Connector {
         create_messages(&mut *connection).await?;
         create_messages_audiences(&mut *connection).await?;
         create_actors_audiences(&mut *connection).await?;
-        create_actors_contacts(&mut *connection).await?;
+        create_actor_following(&mut *connection).await?;
         create_objects(&mut *connection).await?;
 
         let pool_read = if url == "sqlite::memory:" {
@@ -214,7 +214,7 @@ mod test {
         );
 
         // did:1 adds did:2 as a contact
-        put_actor_contact(&mut connection, "did:1/actor", "did:2/actor")
+        put_actor_following(&mut connection, "did:1/actor", "did:2/actor")
             .await
             .unwrap();
         assert_eq!(
