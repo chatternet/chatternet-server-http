@@ -24,16 +24,19 @@ pub async fn get_inbox_for_actor(
     count: i64,
     after: Option<&str>,
 ) -> Result<Vec<String>> {
-    let query_str_1: &'static str = "\
-        SELECT `message` FROM `Messages` \
+    let query_str = format!(
+        "\
+        SELECT `object` FROM `Objects` \
+        INNER JOIN `Messages` \
+        ON `Objects`.`object_id` = `Messages`.`message_id` \
         WHERE (\
-            `actor_id` = $1
-            OR `actor_id` IN (\
+            `Messages`.`actor_id` = $1
+            OR `Messages`.`actor_id` IN (\
                 SELECT `contact_id` FROM `ActorsContacts` \
                 WHERE `ActorsContacts`.`actor_id` = $1
             )\
         )\
-        AND `message_id` IN (\
+        AND `Messages`.`message_id` IN (\
             SELECT `message_id` FROM `MessagesAudiences` \
             WHERE `MessagesAudiences`.`audience_id` = $1
             OR `MessagesAudiences`.`audience_id` IN (\
@@ -41,30 +44,32 @@ pub async fn get_inbox_for_actor(
                 WHERE `ActorsAudiences`.`actor_id` = $1
             )\
         ) \
-        ";
-    let query_str_2: &'static str = "\
-        ORDER BY `idx` DESC
+        {} \
+        ORDER BY `idx` DESC \
         LIMIT $2;\
-        ";
-    let query_str_3: &'static str = "\
-        AND `idx` < (\
-            SELECT `idx` FROM `Messages` \
-            WHERE `message_id` = $3\
-        ) \
-        ";
-    let query_str_1_2: String = format!("{}{}", query_str_1, query_str_2);
-    let query_str_1_3_2: String = format!("{}{}{}", query_str_1, query_str_3, query_str_2);
+        ",
+        if after.is_some() {
+            "\
+            AND `idx` < (\
+                SELECT `idx` FROM `Messages` \
+                WHERE `message_id` = $3\
+            )\
+            "
+        } else {
+            ""
+        }
+    );
     let query = match after {
-        Some(after) => sqlx::query(&query_str_1_3_2)
+        Some(after) => sqlx::query(&query_str)
             .bind(actor_id)
             .bind(count)
             .bind(after),
-        None => sqlx::query(&query_str_1_2).bind(actor_id).bind(count),
+        None => sqlx::query(&query_str).bind(actor_id).bind(count),
     };
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
     while let Some(row) = rows.try_next().await? {
-        let message: &str = row.try_get("message")?;
+        let message: &str = row.try_get("object")?;
         messages.push(message.to_string());
     }
     Ok(messages)
@@ -137,25 +142,40 @@ mod test {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
 
-        put_message(&mut connection, "message 1", "id:1", "did:1/actor")
+        put_or_update_object(&mut connection, "id:1", Some("message 1"))
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:1", "did:1/actor")
             .await
             .unwrap();
         put_message_audience(&mut connection, "id:1", "did:1/actor")
             .await
             .unwrap();
-        put_message(&mut connection, "message 2", "id:2", "did:1/actor")
+
+        put_or_update_object(&mut connection, "id:2", Some("message 2"))
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:2", "did:1/actor")
             .await
             .unwrap();
         put_message_audience(&mut connection, "id:2", "tag:1/followers")
             .await
             .unwrap();
-        put_message(&mut connection, "message 3", "id:3", "did:2/actor")
+
+        put_or_update_object(&mut connection, "id:3", Some("message 3"))
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:3", "did:2/actor")
             .await
             .unwrap();
         put_message_audience(&mut connection, "id:3", "tag:1/followers")
             .await
             .unwrap();
-        put_message(&mut connection, "message 4", "id:4", "did:2/actor")
+
+        put_or_update_object(&mut connection, "id:4", Some("message 4"))
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:4", "did:2/actor")
             .await
             .unwrap();
         put_message_audience(&mut connection, "id:4", "tag:2/followers")
