@@ -74,13 +74,10 @@ async fn handle_follow(
     let actor_id = message.actor.as_str();
     let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
-        // following a did, it as a contact for filtering
-        if object_id.starts_with("did:") {
-            db::put_actor_contact(&mut *connection, &actor_id, &object_id)
-                .await
-                .map_err(|_| AppError::DbQueryFailed)?;
-        }
-        // following any id, add to its followers collection
+        db::put_actor_following(&mut *connection, &actor_id, &object_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+        // also store the audience form of this follow for quick lookup
         db::put_actor_audience(
             &mut *connection,
             &actor_id,
@@ -369,6 +366,6 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let following: Collection<String> = get_body(response).await;
-        assert_eq!(following.items, ["tag:1/followers", "tag:2/followers"]);
+        assert_eq!(following.items, ["tag:1", "tag:2"]);
     }
 }
