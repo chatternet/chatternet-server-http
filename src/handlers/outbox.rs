@@ -151,7 +151,10 @@ pub async fn handle_actor_outbox(
 
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|_| AppError::MessageNotValid)?;
-    db::put_message(&mut *connection, &message, &message_id, &actor_id)
+    db::put_or_update_object(&mut *connection, &message_id, Some(&message))
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::put_message_id(&mut *connection, &message_id, &actor_id)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
 

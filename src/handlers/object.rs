@@ -33,15 +33,6 @@ pub async fn handle_object_get(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
 
-    // objects (without an `/actor` path) are stored in the `Message` or
-    // `Object` tables, check each for the ID and return if found
-
-    let object = db::get_message(&mut connection, &id).await;
-    if let Ok(Some(object)) = object {
-        let object: Value = serde_json::from_str(&object).map_err(|_| AppError::MessageNotValid)?;
-        return Ok(Json(object));
-    }
-
     let object = db::get_object(&mut connection, &id).await;
     if let Ok(Some(object)) = object {
         let object: Value = serde_json::from_str(&object).map_err(|_| AppError::ObjectNotValid)?;

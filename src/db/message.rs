@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sqlx::{Row, SqliteConnection};
+use sqlx::SqliteConnection;
 
 pub async fn create_messages(connection: &mut SqliteConnection) -> Result<()> {
     sqlx::query(
@@ -7,7 +7,6 @@ pub async fn create_messages(connection: &mut SqliteConnection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS `Messages` \
         (\
             `idx` INTEGER PRIMARY KEY AUTOINCREMENT,
-            `message` TEXT NOT NULL, \
             `message_id` TEXT NOT NULL, \
             `actor_id` TEXT NOT NULL\
         );\
@@ -34,20 +33,18 @@ pub async fn create_messages(connection: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-pub async fn put_message(
+pub async fn put_message_id(
     connection: &mut SqliteConnection,
-    message: &str,
     message_id: &str,
     actor_id: &str,
 ) -> Result<()> {
     sqlx::query(
         "\
         INSERT INTO `Messages` \
-        (`message`, `message_id`, `actor_id`) \
-        VALUES($1, $2, $3)\
+        (`message_id`, `actor_id`) \
+        VALUES($1, $2)\
         ",
     )
-    .bind(message)
     .bind(message_id)
     .bind(actor_id)
     .execute(&mut *connection)
@@ -67,22 +64,6 @@ pub async fn has_message(connection: &mut SqliteConnection, id: &str) -> Result<
     Ok(query.fetch_optional(&mut *connection).await?.is_some())
 }
 
-pub async fn get_message(
-    connection: &mut SqliteConnection,
-    message_id: &str,
-) -> Result<Option<String>> {
-    Ok(sqlx::query(
-        "\
-        SELECT `message` FROM `Messages` \
-        WHERE `message_id` = $1;\
-        ",
-    )
-    .bind(message_id)
-    .fetch_one(connection)
-    .await?
-    .get("message"))
-}
-
 #[cfg(test)]
 mod test {
     use tokio;
@@ -94,18 +75,14 @@ mod test {
     async fn puts_and_has_message() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
-        put_message(&mut connection, "message 1", "id:1", "did:1/actor")
+        put_message_id(&mut connection, "id:1", "did:1/actor")
             .await
             .unwrap();
-        put_message(&mut connection, "message 2", "id:2", "did:1/actor")
+        put_message_id(&mut connection, "id:2", "did:1/actor")
             .await
             .unwrap();
         assert!(has_message(&mut connection, "id:1").await.unwrap());
         assert!(has_message(&mut connection, "id:2").await.unwrap());
         assert!(!has_message(&mut connection, "id:3").await.unwrap());
-        assert_eq!(
-            get_message(&mut connection, "id:2").await.unwrap(),
-            Some("message 2".to_string())
-        );
     }
 }
