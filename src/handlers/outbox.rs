@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Result};
+use axum::extract::{Json, Path, State};
+use axum::http::StatusCode;
 use sqlx::SqliteConnection;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use warp::http::StatusCode;
-use warp::Rejection;
 
-use super::error::Error;
+use super::error::AppError;
 use crate::chatternet::activities::{actor_id_from_did, ActivityType, Message};
 use crate::db::{self, Connector};
 
@@ -70,7 +70,7 @@ pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
 async fn handle_follow(
     message: &Message,
     connection: &mut SqliteConnection,
-) -> Result<(), Rejection> {
+) -> Result<(), AppError> {
     let actor_id = message.actor.as_str();
     let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
@@ -78,7 +78,7 @@ async fn handle_follow(
         if object_id.starts_with("did:") {
             db::put_actor_contact(&mut *connection, &actor_id, &object_id)
                 .await
-                .map_err(|_| Error::DbQueryFailed)?;
+                .map_err(|_| AppError::DbQueryFailed)?;
         }
         // following any id, add to its followers collection
         db::put_actor_audience(
@@ -87,19 +87,19 @@ async fn handle_follow(
             &format!("{}/followers", object_id),
         )
         .await
-        .map_err(|_| Error::DbQueryFailed)?;
+        .map_err(|_| AppError::DbQueryFailed)?;
     }
     Ok(())
 }
 
-pub async fn handle_did_outbox(
-    did: String,
-    message: Message,
-    connector: Arc<RwLock<Connector>>,
-) -> Result<impl warp::Reply, Rejection> {
-    let actor_id = actor_id_from_did(&did).map_err(|_| Error::DidNotValid)?;
+pub async fn handle_actor_outbox(
+    State(connector): State<Arc<RwLock<Connector>>>,
+    Path(did): Path<String>,
+    Json(message): Json<Message>,
+) -> Result<StatusCode, AppError> {
+    let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
     if actor_id != message.actor.as_str() {
-        Err(Error::ActorIdWrong)?;
+        Err(AppError::ActorIdWrong)?;
     }
 
     // read write
@@ -107,13 +107,16 @@ pub async fn handle_did_outbox(
     let mut connection = connector
         .connection_mut()
         .await
-        .map_err(|_| Error::DbConnectionFailed)?;
+        .map_err(|_| AppError::DbConnectionFailed)?;
 
     // if already known, take no actions
-    let message_id = message.verify().await.map_err(|_| Error::MessageNotValid)?;
+    let message_id = message
+        .verify()
+        .await
+        .map_err(|_| AppError::MessageNotValid)?;
     if db::has_message(&mut *connection, &message_id)
         .await
-        .map_err(|_| Error::DbQueryFailed)?
+        .map_err(|_| AppError::DbQueryFailed)?
     {
         return Ok(StatusCode::ACCEPTED);
     };
@@ -126,11 +129,11 @@ pub async fn handle_did_outbox(
     }
 
     // store this message id for its audiences
-    let audiences_id = build_audiences_id(&message).map_err(|_| Error::MessageNotValid)?;
+    let audiences_id = build_audiences_id(&message).map_err(|_| AppError::MessageNotValid)?;
     for audience_id in audiences_id {
         db::put_message_audience(&mut *connection, &message_id, &audience_id)
             .await
-            .map_err(|_| Error::DbQueryFailed)?;
+            .map_err(|_| AppError::DbQueryFailed)?;
     }
 
     // create empty objects in the DB which can be updated later
@@ -138,19 +141,19 @@ pub async fn handle_did_outbox(
     for object_id in objects_id {
         db::put_or_update_object(&mut *connection, object_id, None)
             .await
-            .map_err(|_| Error::DbQueryFailed)?;
+            .map_err(|_| AppError::DbQueryFailed)?;
     }
 
     // create an empty object for the actor which can be updated later
     db::put_or_update_object(&mut *connection, message.actor.as_str(), None)
         .await
-        .map_err(|_| Error::DbQueryFailed)?;
+        .map_err(|_| AppError::DbQueryFailed)?;
 
     // store the message itself
-    let message = serde_json::to_string(&message).map_err(|_| Error::MessageNotValid)?;
+    let message = serde_json::to_string(&message).map_err(|_| AppError::MessageNotValid)?;
     db::put_message(&mut *connection, &message, &message_id, &actor_id)
         .await
-        .map_err(|_| Error::DbQueryFailed)?;
+        .map_err(|_| AppError::DbQueryFailed)?;
 
     Ok(StatusCode::OK)
 }
@@ -161,17 +164,13 @@ mod test {
 
     use ssi::vc::URI;
     use tokio;
-    use warp::{http::StatusCode, test::request};
+    use tower::ServiceExt;
 
     use crate::chatternet::activities::Collection;
     use crate::chatternet::didkey;
-    use crate::db::Connector;
 
-    use super::super::build_api;
-    use super::super::test::{build_follow, build_message};
+    use super::super::test_utils::*;
     use super::*;
-
-    const NO_VEC: Option<&Vec<String>> = None;
 
     #[tokio::test]
     async fn builds_audiences_id() {
@@ -199,40 +198,46 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_outbox_handles_message() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
+    async fn handles_message() {
+        let api = build_test_api().await;
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
-        let response = request()
-            .method("POST")
-            .path(&format!("/ap/{}/actor/outbox", did))
-            .json(&message)
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
         // second post returns status accepted
-        let response = request()
-            .method("POST")
-            .path(&format!("/ap/{}/actor/outbox", did))
-            .json(&message)
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-        let response = request()
-            .method("GET")
-            .path(&format!("/ap/{}", &message.id.as_ref().unwrap().as_str()))
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id.as_ref().unwrap().as_str()),
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let message_back: Option<Message> = serde_json::from_slice(response.body()).unwrap();
+        let message_back: Option<Message> = get_body(response).await;
         assert_eq!(
             serde_json::to_string(&message).unwrap(),
             serde_json::to_string(&message_back.unwrap()).unwrap()
@@ -240,30 +245,27 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_outbox_rejects_wrong_did() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
+    async fn rejects_wrong_did() {
+        let api = build_test_api().await;
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
-        let response = request()
-            .method("POST")
-            .path("/ap/did:example:a/actor/outbox")
-            .json(&message)
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                "/api/ap/did:example:a/actor/outbox",
+                &message,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
-    async fn api_outbox_rejects_invalid_message() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
+    async fn rejects_invalid_message() {
+        let api = build_test_api().await;
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -271,21 +273,21 @@ mod test {
 
         let mut message_2 = message.clone();
         message_2.id = Some(URI::from_str("id:a").unwrap());
-        let response = request()
-            .method("POST")
-            .path(&format!("/ap/{}/actor/outbox", did))
-            .json(&message_2)
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_2,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
-    async fn api_outbox_rejects_with_bcc() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
+    async fn rejects_with_bcc() {
+        let api = build_test_api().await;
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -297,21 +299,21 @@ mod test {
             )
         });
 
-        let response = request()
-            .method("POST")
-            .path(&format!("/ap/{}/actor/outbox", did))
-            .json(&message)
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
-    async fn api_outbox_rejects_with_bto() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
+    async fn rejects_with_bto() {
+        let api = build_test_api().await;
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
@@ -323,43 +325,47 @@ mod test {
             )
         });
 
-        let response = request()
-            .method("POST")
-            .path(&format!("/ap/{}/actor/outbox", did))
-            .json(&message)
-            .reply(&api)
-            .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
-    async fn api_outbox_handles_follow_get_gets_following() {
-        let connector = Arc::new(RwLock::new(
-            Connector::new("sqlite::memory:").await.unwrap(),
-        ));
-        let api = build_api(connector, "did:example:server".to_string());
+    async fn handles_follow_get_following() {
+        let api = build_test_api().await;
 
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
 
-        assert_eq!(
-            request()
-                .method("POST")
-                .path(&format!("/ap/{}/actor/outbox", did))
-                .json(&build_follow(&["tag:1", "tag:2"], &jwk).await)
-                .reply(&api)
-                .await
-                .status(),
-            StatusCode::OK
-        );
-
-        let response = request()
-            .method("GET")
-            .path(&format!("/ap/{}/actor/following", did))
-            .reply(&api)
-            .await;
+        let message = build_follow(&["tag:1", "tag:2"], &jwk).await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let following: Collection<String> = serde_json::from_slice(response.body()).unwrap();
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/following", did),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let following: Collection<String> = get_body(response).await;
         assert_eq!(following.items, ["tag:1/followers", "tag:2/followers"]);
     }
 }
