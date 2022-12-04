@@ -100,14 +100,9 @@ mod test {
         let did = didkey::did_from_jwk(&jwk).unwrap();
 
         let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
-        let actor = Actor::new(
-            did.to_string(),
-            ActorType::Person,
-            Some(members),
-            Some(&jwk),
-        )
-        .await
-        .unwrap();
+        let actor = Actor::new(did.to_string(), ActorType::Person, Some(members), &jwk)
+            .await
+            .unwrap();
 
         let response = api
             .clone()
@@ -139,14 +134,9 @@ mod test {
         let did = didkey::did_from_jwk(&jwk).unwrap();
 
         let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
-        let actor = Actor::new(
-            did.to_string(),
-            ActorType::Person,
-            Some(members),
-            Some(&jwk),
-        )
-        .await
-        .unwrap();
+        let actor = Actor::new(did.to_string(), ActorType::Person, Some(members), &jwk)
+            .await
+            .unwrap();
 
         // did doesn't match actor ID
         let response = api
