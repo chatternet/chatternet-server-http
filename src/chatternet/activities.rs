@@ -140,11 +140,8 @@ impl Actor {
         did: String,
         actor_type: ActorType,
         members: Option<Map<String, Value>>,
-        jwk: Option<&JWK>,
+        jwk: &JWK,
     ) -> Result<Self> {
-        if members.is_some() && jwk.is_none() {
-            Err(anyhow!("added members without a JWK signing key"))?;
-        }
         let actor_id = actor_id_from_did(&did)?;
         let id = URI::from_str(&actor_id)?;
         let inbox = URI::try_from(format!("{}/inbox", &actor_id))?;
@@ -165,9 +162,7 @@ impl Actor {
             proof: None,
             members,
         };
-        if let Some(jwk) = jwk {
-            actor.proof = Some(build_proof(&actor, &did, jwk).await?);
-        }
+        actor.proof = Some(build_proof(&actor, &did, jwk).await?);
         Ok(actor)
     }
 
@@ -185,12 +180,6 @@ impl Actor {
         }
         if self.followers.as_str() != format!("{}/followers", &actor_id) {
             Err(anyhow!("actor followers URI is incorrect"))?;
-        }
-        if self.members.is_some() && self.proof.is_none() {
-            Err(anyhow!("actor has members with no proof"))?;
-        }
-        if self.proof.is_none() {
-            return Ok(());
         }
 
         let mut actor = self.clone();
@@ -557,7 +546,7 @@ mod test {
     async fn builds_actor_no_members_verifies() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let actor = Actor::new(did, ActorType::Person, None, None)
+        let actor = Actor::new(did, ActorType::Person, None, &jwk)
             .await
             .unwrap();
         actor.verify().await.unwrap();
@@ -567,7 +556,7 @@ mod test {
     async fn builds_actor_no_members_doesnt_verify_invalid_uris() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
-        let actor = Actor::new(did, ActorType::Person, None, None)
+        let actor = Actor::new(did, ActorType::Person, None, &jwk)
             .await
             .unwrap();
         let mut actor_invalid = actor.clone();
@@ -592,7 +581,7 @@ mod test {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
-        let actor = Actor::new(did, ActorType::Person, Some(members), Some(&jwk))
+        let actor = Actor::new(did, ActorType::Person, Some(members), &jwk)
             .await
             .unwrap();
         actor.verify().await.unwrap();
@@ -603,7 +592,7 @@ mod test {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let did = didkey::did_from_jwk(&jwk).unwrap();
         let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
-        let actor = Actor::new(did, ActorType::Person, Some(members), Some(&jwk))
+        let actor = Actor::new(did, ActorType::Person, Some(members), &jwk)
             .await
             .unwrap();
         let mut actor_invalid = actor.clone();
