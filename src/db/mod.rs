@@ -7,15 +7,17 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
 
 mod actor_audience;
-mod following;
+mod actor_following;
 mod message;
 mod message_audience;
+mod message_object;
 mod object;
 
 pub use actor_audience::*;
-pub use following::*;
+pub use actor_following::*;
 pub use message::*;
 pub use message_audience::*;
+pub use message_object::*;
 pub use object::*;
 
 pub async fn get_inbox_for_actor(
@@ -93,6 +95,7 @@ impl Connector {
         let mut connection = pool_write.acquire().await?;
         create_messages(&mut *connection).await?;
         create_messages_audiences(&mut *connection).await?;
+        create_messages_objects(&mut *connection).await?;
         create_actors_audiences(&mut *connection).await?;
         create_actor_following(&mut *connection).await?;
         create_objects(&mut *connection).await?;
@@ -142,7 +145,7 @@ mod test {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
 
-        put_or_update_object(&mut connection, "id:1", Some("message 1"))
+        put_object(&mut connection, "id:1", "message 1")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:1", "did:1/actor")
@@ -152,7 +155,7 @@ mod test {
             .await
             .unwrap();
 
-        put_or_update_object(&mut connection, "id:2", Some("message 2"))
+        put_object(&mut connection, "id:2", "message 2")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:2", "did:1/actor")
@@ -162,7 +165,7 @@ mod test {
             .await
             .unwrap();
 
-        put_or_update_object(&mut connection, "id:3", Some("message 3"))
+        put_object(&mut connection, "id:3", "message 3")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:3", "did:2/actor")
@@ -172,7 +175,7 @@ mod test {
             .await
             .unwrap();
 
-        put_or_update_object(&mut connection, "id:4", Some("message 4"))
+        put_object(&mut connection, "id:4", "message 4")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:4", "did:2/actor")

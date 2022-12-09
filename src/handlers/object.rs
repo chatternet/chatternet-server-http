@@ -56,11 +56,10 @@ pub async fn handle_object_post(
     if object.id.as_ref().map(|x| x.as_str() != id).unwrap_or(true) {
         Err(AppError::ObjectIdWrong)?;
     }
-    // server doesn't accept unsigned data, since objects are unsigned, the
-    // server must first know about a (signed) message that has that object
-    if !db::has_object(&mut *connection, &id)
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?
+    // only accept object if a known (signed) message is associated with it
+    if !db::has_message_with_object(&mut *connection, &id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?
     {
         Err(AppError::ObjectNotKnown)?;
     }
@@ -69,7 +68,7 @@ pub async fn handle_object_post(
         Err(AppError::ObjectNotValid)?;
     }
     let object = serde_json::to_string(&object).map_err(|_| AppError::ObjectNotValid)?;
-    db::put_or_update_object(&mut *connection, &id, Some(&object))
+    db::put_object(&mut *connection, &id, &object)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     Ok(StatusCode::OK)

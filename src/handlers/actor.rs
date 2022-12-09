@@ -1,11 +1,12 @@
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
+use chatternet::actor_id_from_dida;
+use chatternet::model::{Actor, Collection, CollectionType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::chatternet::activities::{actor_id_from_did, Actor, Collection, CollectionType};
 use crate::db::{self, Connector};
 
 /// Get the Actor Object with `did` using a DB connection obtained from
@@ -51,7 +52,7 @@ pub async fn handle_actor_post(
         Err(AppError::ActorNotValid)?;
     }
     let actor = serde_json::to_string(&actor).map_err(|_| AppError::ActorNotValid)?;
-    db::put_or_update_object(&mut *connection, &actor_id, Some(&actor))
+    db::put_object(&mut *connection, &actor_id, &actor)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     Ok(StatusCode::OK)

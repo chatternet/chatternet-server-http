@@ -133,22 +133,17 @@ pub async fn handle_actor_outbox(
             .map_err(|_| AppError::DbQueryFailed)?;
     }
 
-    // create empty objects in the DB which can be updated later
+    // associate this message with its objects so they can be stored later
     let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
-        db::put_or_update_object(&mut *connection, object_id, None)
+        db::put_message_object(&mut *connection, &message_id, object_id)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
 
-    // create an empty object for the actor which can be updated later
-    db::put_or_update_object(&mut *connection, message.actor.as_str(), None)
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|_| AppError::MessageNotValid)?;
-    db::put_or_update_object(&mut *connection, &message_id, Some(&message))
+    db::put_object(&mut *connection, &message_id, &message)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     db::put_message_id(&mut *connection, &message_id, &actor_id)
