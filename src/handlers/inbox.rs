@@ -1,11 +1,14 @@
 use anyhow::{Error as AnyError, Result};
 use axum::extract::{Json, Path, Query, State};
+use chatternet::{
+    didkey::actor_id_from_did,
+    model::{new_inbox, Collection, Message},
+};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::chatternet::activities::{actor_id_from_did, new_inbox, Collection, Message};
 use crate::db::{self, Connector};
 
 #[derive(Deserialize, Serialize)]
@@ -41,11 +44,9 @@ pub async fn handle_inbox(
 #[cfg(test)]
 mod test {
     use axum::http::StatusCode;
+    use chatternet::didkey::{build_jwk, did_from_jwk};
     use tokio;
     use tower::ServiceExt;
-
-    use crate::chatternet::activities::Collection;
-    use crate::chatternet::didkey;
 
     use super::super::test_utils::*;
     use super::*;
@@ -54,11 +55,11 @@ mod test {
     async fn api_inbox_returns_messages() {
         let api = build_test_api().await;
 
-        let jwk_1 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did_1 = didkey::did_from_jwk(&jwk_1).unwrap();
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_1 = did_from_jwk(&jwk_1).unwrap();
 
-        let jwk_2 = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did_2 = didkey::did_from_jwk(&jwk_2).unwrap();
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_2 = did_from_jwk(&jwk_2).unwrap();
 
         // did_1 will see because follows self and this is addressed to self
         let message = build_message(
@@ -135,7 +136,7 @@ mod test {
             inbox
                 .items
                 .iter()
-                .map(|x| x.object.iter().map(|x| x.as_str()))
+                .map(|x| x.no_id.no_proof.object.iter().map(|x| x.as_str()))
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:1"]
@@ -167,7 +168,7 @@ mod test {
             inbox
                 .items
                 .iter()
-                .map(|x| x.object.iter().map(|x| x.as_str()))
+                .map(|x| x.no_id.no_proof.object.iter().map(|x| x.as_str()))
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:3", "id:1"]

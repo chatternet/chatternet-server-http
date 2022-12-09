@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Error, Result};
 use async_trait::async_trait;
 use chrono::prelude::{DateTime, Utc};
 use cid::multihash::{Code, MultihashDigest};
@@ -18,6 +18,7 @@ use ssi::vc::{LinkedDataProofOptions, URI};
 use ssi::{did_resolve, urdna2015};
 use std::str::FromStr;
 
+use super::didkey::did_from_jwk;
 use super::ldcontexts;
 
 const CONTEXT_ACTIVITY_STREAMS: &str = ldcontexts::ACTIVITY_STREAMS_URI;
@@ -55,14 +56,14 @@ pub fn uri_from_cid(cid: Cid) -> Result<URI> {
 pub fn cid_from_uri(uri: &URI) -> Result<Cid> {
     let uri_str = uri.as_str();
     if uri_str.len() < 8 {
-        Err(anyhow!("URI does not contain a CID"))?;
+        Err(Error::msg("URI does not contain a CID"))?;
     }
     Ok(Cid::try_from(&uri_str[8..])?)
 }
 
 pub fn actor_id_from_did(did: &str) -> Result<String> {
     if !did.starts_with("did:") {
-        Err(anyhow!("DID has invalid prefix"))?;
+        Err(Error::msg("DID has invalid prefix"))?;
     }
     Ok(format!("{}/actor", did))
 }
@@ -70,12 +71,12 @@ pub fn actor_id_from_did(did: &str) -> Result<String> {
 pub fn did_from_actor_id(actor_id: &str) -> Result<String> {
     let (did, path) = actor_id
         .split_once("/")
-        .ok_or(anyhow!("actor ID is not a did and path"))?;
+        .ok_or(Error::msg("actor ID is not a did and path"))?;
     if !did.starts_with("did:") {
-        Err(anyhow!("actor ID is not a DID"))?;
+        Err(Error::msg("actor ID is not a DID"))?;
     }
     if path != "actor" {
-        Err(anyhow!("actor ID path is not an actor"))?;
+        Err(Error::msg("actor ID path is not an actor"))?;
     }
     Ok(did.to_string())
 }
@@ -92,7 +93,7 @@ async fn build_proof(
     let verification_method = verification_methods
         .keys()
         .next()
-        .ok_or(anyhow!("actor has no verification method"))?;
+        .ok_or(Error::msg("actor has no verification method"))?;
     let verification_method = URI::from_str(verification_method)?;
     options.type_ = Some("Ed25519Signature2020".to_string());
     options.verification_method = Some(verification_method);
@@ -105,6 +106,56 @@ async fn build_proof(
         None,
     )
     .await?)
+}
+
+#[async_trait]
+trait ProofVerifier: LinkedDataDocument + Sized + Sync {
+    fn get_proof_issuer_did(&self) -> Result<String>;
+
+    fn take_proof(self) -> Result<(Proof, Self)>;
+
+    async fn verify_proof(mut self) -> Result<(Proof, Self)> {
+        let issuer = self.get_proof_issuer_did()?.as_str().to_owned();
+
+        let proof_purpose = self
+            .get_default_proof_purpose()
+            .ok_or(Error::msg("proof has no purpose"))?;
+
+        let verification_methods =
+            did_resolve::get_verification_methods(&issuer, proof_purpose, &DIDKey).await?;
+        let (proof, without_proof) = self.take_proof()?;
+        match &proof.verification_method {
+            Some(verification_method) => {
+                if !verification_methods.contains_key(verification_method) {
+                    return Err(Error::msg("proof cannot be verified by issuer"));
+                }
+            }
+            None => {
+                return Err(Error::msg("proof cannot be verified"));
+            }
+        };
+
+        LinkedDataProofs::verify(&proof, &without_proof, &DIDKey, &mut new_context_loader())
+            .await?;
+
+        Ok((proof, without_proof))
+    }
+}
+
+#[async_trait]
+trait IdVerifier: Serialize + Sized + Send + Sync {
+    fn take_id(self) -> Result<(URI, Self)>;
+
+    async fn verify_id(self) -> Result<(URI, Self)> {
+        let (id, without_id) = self.take_id()?;
+        let cid_message = cid_from_uri(&id)?;
+        //let cid_data = cid_from_json(Arc::new(without_id), &mut new_context_loader(), None).await?;
+        let cid_data = cid_from_json(&without_id, &mut new_context_loader(), None).await?;
+        if cid_message.hash().digest() != cid_data.hash().digest() {
+            return Err(Error::msg("object ID does not match its contents"));
+        }
+        Ok((id, without_id))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -168,41 +219,19 @@ impl Actor {
 
     pub async fn verify(&self) -> Result<()> {
         let actor_id = self.id.as_str();
-        let did = did_from_actor_id(actor_id)?;
         if self.inbox.as_str() != format!("{}/inbox", &actor_id) {
-            Err(anyhow!("actor inbox URI is incorrect"))?;
+            Err(Error::msg("actor inbox URI is incorrect"))?;
         }
         if self.outbox.as_str() != format!("{}/outbox", &actor_id) {
-            Err(anyhow!("actor outbox URI is incorrect"))?;
+            Err(Error::msg("actor outbox URI is incorrect"))?;
         }
         if self.following.as_str() != format!("{}/following", &actor_id) {
-            Err(anyhow!("actor following URI is incorrect"))?;
+            Err(Error::msg("actor following URI is incorrect"))?;
         }
         if self.followers.as_str() != format!("{}/followers", &actor_id) {
-            Err(anyhow!("actor followers URI is incorrect"))?;
+            Err(Error::msg("actor followers URI is incorrect"))?;
         }
-
-        let mut actor = self.clone();
-        let proof_purpose = actor
-            .get_default_proof_purpose()
-            .ok_or(anyhow!("actor has no proof purpose"))?;
-        let proof = actor
-            .proof
-            .take()
-            .ok_or(anyhow!("actor does not contain a proof"))?;
-        let verification_methods =
-            did_resolve::get_verification_methods(&did, proof_purpose, &DIDKey).await?;
-        match &proof.verification_method {
-            Some(verification_method) => {
-                if !verification_methods.contains_key(verification_method) {
-                    return Err(anyhow!("actor proof cannot be verified by actor"));
-                }
-            }
-            None => {
-                return Err(anyhow!("actor proof cannot be verified"));
-            }
-        };
-        LinkedDataProofs::verify(&proof, &actor, &DIDKey, &mut new_context_loader()).await?;
+        self.clone().verify_proof().await?;
         Ok(())
     }
 }
@@ -235,6 +264,19 @@ impl LinkedDataDocument for Actor {
     }
 }
 
+#[async_trait]
+impl ProofVerifier for Actor {
+    fn get_proof_issuer_did(&self) -> Result<String> {
+        did_from_actor_id(self.id.as_str())
+    }
+    fn take_proof(mut self) -> Result<(Proof, Self)> {
+        Ok((
+            self.proof.take().ok_or(Error::msg("actor has no proof"))?,
+            self,
+        ))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum ObjectType {
     Article,
@@ -261,18 +303,29 @@ pub struct Object {
     #[serde(rename = "type")]
     pub object_type: ObjectType,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub proof: Option<Proof>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(flatten)]
     pub members: Option<Map<String, Value>>,
 }
 
 impl Object {
-    pub async fn new(object_type: ObjectType, members: Option<Map<String, Value>>) -> Result<Self> {
+    pub async fn new(
+        object_type: ObjectType,
+        members: Option<Map<String, Value>>,
+        jwk: Option<&JWK>,
+    ) -> Result<Self> {
         let mut object = Object {
             context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
             id: None,
             object_type,
+            proof: None,
             members,
         };
+        if let Some(jwk) = jwk {
+            let did = did_from_jwk(&jwk)?;
+            object.proof = Some(build_proof(&object, &did, jwk).await?);
+        }
         object.id = Some(
             uri_from_cid(cid_from_json(&object, &mut new_context_loader(), None).await?).unwrap(),
         );
@@ -280,17 +333,71 @@ impl Object {
     }
 
     pub async fn verify(&self) -> Result<String> {
-        let mut object = self.clone();
-        let id = object
-            .id
-            .take()
-            .ok_or(anyhow!("object does not contain an ID"))?;
-        let cid_object = cid_from_uri(&id)?;
-        let cid_data = cid_from_json(&object, &mut new_context_loader(), None).await?;
-        if cid_object.hash().digest() != cid_data.hash().digest() {
-            return Err(anyhow!("object ID does not match its contents"));
+        let object = self.clone();
+        let (id, without_id) = object.verify_id().await?;
+        if self.proof.is_some() {
+            without_id.verify_proof().await?;
         }
         Ok(id.to_string())
+    }
+}
+
+#[async_trait]
+impl LinkedDataDocument for Object {
+    fn get_contexts(&self) -> Result<Option<String>, LdpError> {
+        Ok(serde_json::to_string(&self.context).ok())
+    }
+
+    async fn to_dataset_for_signing(
+        &self,
+        parent: Option<&(dyn LinkedDataDocument + Sync)>,
+        context_loader: &mut ContextLoader,
+    ) -> Result<DataSet, LdpError> {
+        let json = serde_json::to_string(&self)?;
+        let more_contexts = match parent {
+            Some(parent) => parent.get_contexts()?,
+            None => None,
+        };
+        Ok(json_to_dataset(&json, more_contexts.as_ref(), false, None, context_loader).await?)
+    }
+
+    fn to_value(&self) -> Result<Value, LdpError> {
+        Ok(serde_json::to_value(&self)?)
+    }
+
+    fn get_default_proof_purpose(&self) -> Option<ProofPurpose> {
+        Some(ProofPurpose::AssertionMethod)
+    }
+}
+
+#[async_trait]
+impl ProofVerifier for Object {
+    fn get_proof_issuer_did(&self) -> Result<String> {
+        let proof = self
+            .proof
+            .as_ref()
+            .ok_or(Error::msg("object has no proof"))?;
+        Ok(proof
+            .verification_method
+            .clone()
+            .ok_or(Error::msg("object proof has no creator"))?
+            .split('#')
+            .next()
+            .ok_or(Error::msg("object proof has no creator"))?
+            .to_string())
+    }
+    fn take_proof(mut self) -> Result<(Proof, Self)> {
+        Ok((
+            self.proof.take().ok_or(Error::msg("object has no proof"))?,
+            self,
+        ))
+    }
+}
+
+#[async_trait]
+impl IdVerifier for Object {
+    fn take_id(mut self) -> Result<(URI, Self)> {
+        Ok((self.id.take().ok_or(Error::msg("object has no ID"))?, self))
     }
 }
 
@@ -357,7 +464,7 @@ impl Message {
         let actor_id = URI::try_from(actor_id_from_did(actor_did)?)?;
         let objects_id: Result<Vec<URI>> = objects_id
             .iter()
-            .map(|x| URI::from_str(x.as_ref()).map_err(anyhow::Error::new))
+            .map(|x| URI::from_str(x.as_ref()).map_err(Error::new))
             .collect();
         let objects_id = objects_id?;
         let published = published.unwrap_or_else(now_ms);
@@ -384,40 +491,62 @@ impl Message {
     }
 
     pub async fn verify(&self) -> Result<String> {
-        let mut message = self.clone();
-        let proof_purpose = message
-            .get_default_proof_purpose()
-            .ok_or(anyhow!("message has no proof purpose"))?;
-        let actor_did = did_from_actor_id(message.actor.as_str())?;
-        let id = message
-            .id
-            .take()
-            .ok_or(anyhow!("message does not contain an ID"))?;
-        let cid_message = cid_from_uri(&id)?;
-        let cid_data = cid_from_json(&message, &mut new_context_loader(), None).await?;
-        if cid_message.hash().digest() != cid_data.hash().digest() {
-            return Err(anyhow!("message ID does not match its contents"));
+        let message = self.clone();
+        let (id, without_id) = message.verify_id().await?;
+        if self.proof.is_some() {
+            without_id.verify_proof().await?;
         }
-        let proof = message
-            .proof
-            .take()
-            .ok_or(anyhow!("message does not contain a proof"))?;
-        let verification_methods =
-            did_resolve::get_verification_methods(&actor_did, proof_purpose, &DIDKey).await?;
-        match &proof.verification_method {
-            Some(verification_method) => {
-                if !verification_methods.contains_key(verification_method) {
-                    return Err(anyhow!("message proof cannot be verified by actor"));
-                }
-            }
-            None => {
-                return Err(anyhow!("message proof cannot be verified"));
-            }
-        };
-        LinkedDataProofs::verify(&proof, &message, &DIDKey, &mut new_context_loader()).await?;
-        message.id = Some(id.clone());
-        message.proof = Some(proof);
         Ok(id.to_string())
+    }
+}
+
+#[async_trait]
+impl LinkedDataDocument for Message {
+    fn get_contexts(&self) -> Result<Option<String>, LdpError> {
+        Ok(serde_json::to_string(&self.context).ok())
+    }
+
+    async fn to_dataset_for_signing(
+        &self,
+        parent: Option<&(dyn LinkedDataDocument + Sync)>,
+        context_loader: &mut ContextLoader,
+    ) -> Result<DataSet, LdpError> {
+        let json = serde_json::to_string(&self)?;
+        let more_contexts = match parent {
+            Some(parent) => parent.get_contexts()?,
+            None => None,
+        };
+        Ok(json_to_dataset(&json, more_contexts.as_ref(), false, None, context_loader).await?)
+    }
+
+    fn to_value(&self) -> Result<Value, LdpError> {
+        Ok(serde_json::to_value(&self)?)
+    }
+
+    fn get_default_proof_purpose(&self) -> Option<ProofPurpose> {
+        Some(ProofPurpose::AssertionMethod)
+    }
+}
+
+#[async_trait]
+impl ProofVerifier for Message {
+    fn get_proof_issuer_did(&self) -> Result<String> {
+        Ok(did_from_actor_id(self.actor.as_str())?)
+    }
+    fn take_proof(mut self) -> Result<(Proof, Self)> {
+        Ok((
+            self.proof
+                .take()
+                .ok_or(Error::msg("message has no proof"))?,
+            self,
+        ))
+    }
+}
+
+#[async_trait]
+impl IdVerifier for Message {
+    fn take_id(mut self) -> Result<(URI, Self)> {
+        Ok((self.id.take().ok_or(Error::msg("message has no ID"))?, self))
     }
 }
 
@@ -466,34 +595,6 @@ pub fn new_inbox(
         collection_type: CollectionType::OrderedCollection,
         items: messages,
     })
-}
-
-#[async_trait]
-impl LinkedDataDocument for Message {
-    fn get_contexts(&self) -> Result<Option<String>, LdpError> {
-        Ok(serde_json::to_string(&self.context).ok())
-    }
-
-    async fn to_dataset_for_signing(
-        &self,
-        parent: Option<&(dyn LinkedDataDocument + Sync)>,
-        context_loader: &mut ContextLoader,
-    ) -> Result<DataSet, LdpError> {
-        let json = serde_json::to_string(&self)?;
-        let more_contexts = match parent {
-            Some(parent) => parent.get_contexts()?,
-            None => None,
-        };
-        Ok(json_to_dataset(&json, more_contexts.as_ref(), false, None, context_loader).await?)
-    }
-
-    fn to_value(&self) -> Result<Value, LdpError> {
-        Ok(serde_json::to_value(&self)?)
-    }
-
-    fn get_default_proof_purpose(&self) -> Option<ProofPurpose> {
-        Some(ProofPurpose::AssertionMethod)
-    }
 }
 
 #[cfg(test)]
@@ -604,16 +705,30 @@ mod test {
     }
 
     #[tokio::test]
-    async fn builds_object_verifies() {
+    async fn builds_object_verifies_no_proof() {
         let members = json!({"content": "abc"}).as_object().unwrap().to_owned();
-        let object = Object::new(ObjectType::Note, Some(members)).await.unwrap();
+        let object = Object::new(ObjectType::Note, Some(members), None)
+            .await
+            .unwrap();
         object.verify().await.unwrap();
     }
 
     #[tokio::test]
-    async fn builds_object_doesnt_verify_invalid_id() {
+    async fn builds_object_verifies_proof() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let members = json!({"content": "abc"}).as_object().unwrap().to_owned();
-        let object = Object::new(ObjectType::Note, Some(members)).await.unwrap();
+        let object = Object::new(ObjectType::Note, Some(members), Some(&jwk))
+            .await
+            .unwrap();
+        object.verify().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn object_doesnt_verify_invalid_id() {
+        let members = json!({"content": "abc"}).as_object().unwrap().to_owned();
+        let object = Object::new(ObjectType::Note, Some(members), None)
+            .await
+            .unwrap();
         let mut object_invalid = object.clone();
         object_invalid
             .members

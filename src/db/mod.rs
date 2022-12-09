@@ -2,6 +2,7 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use futures::TryStreamExt;
+use sha2::{Digest, Sha256};
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
@@ -10,15 +11,26 @@ mod actor_audience;
 mod actor_following;
 mod message;
 mod message_audience;
-mod message_object;
+mod message_body;
 mod object;
 
 pub use actor_audience::*;
 pub use actor_following::*;
 pub use message::*;
 pub use message_audience::*;
-pub use message_object::*;
+pub use message_body::*;
 pub use object::*;
+
+fn joint_id(ids: &[&str]) -> String {
+    // IDs are generic, one ID could contain many IDs, so need to use a
+    // separator not included in the IDs. JSON does this by encoding the IDs
+    // into `"` escaped strings.
+    let ids = serde_json::to_string(ids).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(ids.as_bytes());
+    let hash = hasher.finalize();
+    base64::encode(hash)
+}
 
 pub async fn get_inbox_for_actor(
     connection: &mut SqliteConnection,
@@ -95,7 +107,7 @@ impl Connector {
         let mut connection = pool_write.acquire().await?;
         create_messages(&mut *connection).await?;
         create_messages_audiences(&mut *connection).await?;
-        create_messages_objects(&mut *connection).await?;
+        create_messages_bodies(&mut *connection).await?;
         create_actors_audiences(&mut *connection).await?;
         create_actor_following(&mut *connection).await?;
         create_objects(&mut *connection).await?;
@@ -139,6 +151,15 @@ mod test {
     use tokio;
 
     use super::*;
+
+    #[test]
+    fn builds_a_joint_id() {
+        let id = joint_id(&["a", "b"]);
+        // re-calculates the same id
+        assert_eq!(id, joint_id(&["a", "b"]));
+        // differs from simply joining the IDs
+        assert_ne!(id, joint_id(&["ab"]));
+    }
 
     #[tokio::test]
     async fn db_gets_inbox_for_actor() {

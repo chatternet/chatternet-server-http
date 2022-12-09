@@ -1,3 +1,7 @@
+//! Handle modifying object state.
+//!
+//! Objects include messages and bodies. Actors are handled separately.
+
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
@@ -8,14 +12,19 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::chatternet::activities::Object;
 use crate::db::{self, Connector};
+use chatternet::model::Body;
 
+/// Handle a get request for an object with ID `id`.
+///
+/// Generates a DID document if a the ID is a DID, otherwise will lookup
+/// the ID in the object table which contains messages and bodies.
 pub async fn handle_object_get(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     // if this is just a DID, generate its corresponding DID document
+    // note that IDs with the `/actor` suffix is handled in a different route
     if id.starts_with("did:key:") {
         let (_, document, _) = DIDKey
             .resolve(&id, &ResolutionInputMetadata::default())
@@ -42,10 +51,11 @@ pub async fn handle_object_get(
     Err(AppError::ObjectNotKnown)?
 }
 
+/// Handle a post request for an object `object` with ID `id`.
 pub async fn handle_object_post(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(id): Path<String>,
-    Json(object): Json<Object>,
+    Json(object): Json<Body>,
 ) -> Result<StatusCode, AppError> {
     let mut connector = connector.write().await;
     let mut connection = connector
@@ -53,13 +63,13 @@ pub async fn handle_object_post(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
 
-    if object.id.as_ref().map(|x| x.as_str() != id).unwrap_or(true) {
+    if object.id.as_str() != id {
         Err(AppError::ObjectIdWrong)?;
     }
     // only accept object if a known (signed) message is associated with it
-    if !db::has_message_with_object(&mut *connection, &id)
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?
+    if !db::has_message_with_body(&mut *connection, &id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
     {
         Err(AppError::ObjectNotKnown)?;
     }
@@ -76,28 +86,28 @@ pub async fn handle_object_post(
 
 #[cfg(test)]
 mod test {
-    use axum::body::Body;
+    use axum::body::Body as HttpBody;
     use axum::http::{Request, StatusCode};
     use serde_json::json;
     use tokio;
     use tower::ServiceExt;
 
-    use crate::chatternet::activities::{Object, ObjectType};
-    use crate::chatternet::didkey;
+    use chatternet::didkey::{build_jwk, did_from_jwk};
+    use chatternet::model::{Body, BodyNoId, BodyType};
 
     use super::super::test_utils::*;
 
     #[tokio::test]
     async fn builds_did_document() {
         let api = build_test_api().await;
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
         let response = api
             .oneshot(
                 Request::builder()
                     .method("GET")
                     .uri(format!("/api/ap/{}", did))
-                    .body(Body::empty())
+                    .body(HttpBody::empty())
                     .unwrap(),
             )
             .await
@@ -131,11 +141,11 @@ mod test {
     async fn api_object_updates_and_gets() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
-        let object = Object::new(ObjectType::Note, None).await.unwrap();
-        let object_id = object.id.as_ref().unwrap().as_str();
+        let object = Body::new(BodyType::Note, None).await.unwrap();
+        let object_id = object.id.as_str();
         let message = build_message(object_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         // post a message so that the server knows about the object
@@ -169,7 +179,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let object_back: Option<Object> = get_body(response).await;
+        let object_back: Option<Body> = get_body(response).await;
         let object_back = object_back.unwrap();
         assert_eq!(object_back.id, object.id);
     }
@@ -178,11 +188,11 @@ mod test {
     async fn api_object_wont_update_invalid_object() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
-        let object = Object::new(ObjectType::Note, None).await.unwrap();
-        let object_id = object.id.as_ref().unwrap().as_str();
+        let object = Body::new(BodyType::Note, None).await.unwrap();
+        let object_id = object.id.as_str();
         let message = build_message(object_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = api
@@ -205,14 +215,21 @@ mod test {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         // object contents don't match ID
-        let mut object_invalid = object.clone();
-        object_invalid.members = Some(json!({"content": "abcd"}).as_object().unwrap().to_owned());
+        let members = json!({"content": "abcd"}).as_object().unwrap().to_owned();
+        let object = Body {
+            id: object.id.clone(),
+            no_id: BodyNoId {
+                members: Some(members),
+                ..object.no_id
+            },
+        };
+
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}", object_id),
-                &object_invalid,
+                &object,
             ))
             .await
             .unwrap();
@@ -233,8 +250,8 @@ mod test {
     #[tokio::test]
     async fn api_object_wont_post_unknown() {
         let api = build_test_api().await;
-        let object = Object::new(ObjectType::Note, None).await.unwrap();
-        let object_id = object.id.as_ref().unwrap().as_str();
+        let object = Body::new(BodyType::Note, None).await.unwrap();
+        let object_id = object.id.as_str();
         let response = api
             .clone()
             .oneshot(request_json(

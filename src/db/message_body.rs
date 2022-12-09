@@ -2,13 +2,16 @@ use anyhow::Result;
 use futures::TryStreamExt;
 use sqlx::{Row, SqliteConnection};
 
-pub async fn create_messages_objects(connection: &mut SqliteConnection) -> Result<()> {
+use super::joint_id;
+
+pub async fn create_messages_bodies(connection: &mut SqliteConnection) -> Result<()> {
     sqlx::query(
         "\
-        CREATE TABLE IF NOT EXISTS `MessagesObjects` \
+        CREATE TABLE IF NOT EXISTS `MessagesBodies` \
         (\
+            `joint_id` TEXT PRIMARY KEY, \
             `message_id` TEXT NOT NULL, \
-            `object_id` TEXT NOT NULL\
+            `body_id` TEXT NOT NULL\
         );\
         ",
     )
@@ -17,15 +20,15 @@ pub async fn create_messages_objects(connection: &mut SqliteConnection) -> Resul
     sqlx::query(
         "\
         CREATE INDEX IF NOT EXISTS `message_id` \
-        ON `MessagesObjects`(`message_id`);\
+        ON `MessagesBodies`(`message_id`);\
         ",
     )
     .execute(&mut *connection)
     .await?;
     sqlx::query(
         "\
-        CREATE INDEX IF NOT EXISTS `object_id` \
-        ON `MessagesObjects`(`object_id`);\
+        CREATE INDEX IF NOT EXISTS `body_id` \
+        ON `MessagesBodies`(`body_id`);\
         ",
     )
     .execute(&mut *connection)
@@ -34,56 +37,57 @@ pub async fn create_messages_objects(connection: &mut SqliteConnection) -> Resul
     Ok(())
 }
 
-pub async fn put_message_object(
+pub async fn put_message_body(
     connection: &mut SqliteConnection,
     message_id: &str,
-    object_id: &str,
+    body_id: &str,
 ) -> Result<()> {
     sqlx::query(
         "\
-        INSERT INTO `MessagesObjects` \
-        (`message_id`, `object_id`) \
-        VALUES($1, $2);\
+        INSERT OR IGNORE INTO `MessagesBodies` \
+        (`joint_id`, `message_id`, `body_id`) \
+        VALUES($1, $2, $3);\
         ",
     )
+    .bind(joint_id(&[message_id, body_id]))
     .bind(message_id)
-    .bind(object_id)
+    .bind(body_id)
     .execute(&mut *connection)
     .await?;
     Ok(())
 }
 
-pub async fn get_message_objects(
+pub async fn get_message_bodies(
     connection: &mut SqliteConnection,
     message_id: &str,
 ) -> Result<Vec<String>> {
     let query = sqlx::query(
         "\
-        SELECT `object_id` FROM `MessagesObjects` \
+        SELECT `body_id` FROM `MessagesBodies` \
         WHERE `message_id` = $1;\
         ",
     )
     .bind(message_id);
-    let mut objects_id = Vec::new();
+    let mut bodies_id = Vec::new();
     let mut rows = query.fetch(&mut *connection);
     while let Some(row) = rows.try_next().await? {
-        let object_id: &str = row.try_get("object_id")?;
-        objects_id.push(object_id.to_string());
+        let body_id: &str = row.try_get("body_id")?;
+        bodies_id.push(body_id.to_string());
     }
-    Ok(objects_id)
+    Ok(bodies_id)
 }
 
-pub async fn get_object_messages(
+pub async fn get_body_messages(
     connection: &mut SqliteConnection,
-    object_id: &str,
+    body_id: &str,
 ) -> Result<Vec<String>> {
     let query = sqlx::query(
         "\
-        SELECT `message_id` FROM `MessagesObjects` \
-        WHERE `object_id` = $1;\
+        SELECT `message_id` FROM `MessagesBodies` \
+        WHERE `body_id` = $1;\
         ",
     )
-    .bind(object_id);
+    .bind(body_id);
     let mut messages_id = Vec::new();
     let mut rows = query.fetch(&mut *connection);
     while let Some(row) = rows.try_next().await? {
@@ -93,18 +97,18 @@ pub async fn get_object_messages(
     Ok(messages_id)
 }
 
-pub async fn has_message_with_object(
+pub async fn has_message_with_body(
     connection: &mut SqliteConnection,
-    object_id: &str,
+    body_id: &str,
 ) -> Result<bool> {
     let query = sqlx::query(
         "\
-        SELECT 1 FROM `MessagesObjects` \
-        WHERE `object_id` = $1 \
+        SELECT 1 FROM `MessagesBodies` \
+        WHERE `body_id` = $1 \
         LIMIT 1;\
         ",
     )
-    .bind(object_id);
+    .bind(body_id);
     Ok(query.fetch_optional(&mut *connection).await?.is_some())
 }
 
@@ -116,43 +120,43 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn gets_has_messages_and_objects() {
+    async fn gets_has_messages_and_bodies() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
-        put_message_object(&mut connection, "urn:cid:message1", "urn:cid:object1")
+        put_message_body(&mut connection, "urn:cid:message1", "urn:cid:body1")
             .await
             .unwrap();
-        put_message_object(&mut connection, "urn:cid:message2", "urn:cid:object1")
+        put_message_body(&mut connection, "urn:cid:message2", "urn:cid:body1")
             .await
             .unwrap();
-        put_message_object(&mut connection, "urn:cid:message2", "urn:cid:object2")
+        put_message_body(&mut connection, "urn:cid:message2", "urn:cid:body2")
             .await
             .unwrap();
-        put_message_object(&mut connection, "urn:cid:message3", "urn:cid:object3")
+        put_message_body(&mut connection, "urn:cid:message3", "urn:cid:body3")
             .await
             .unwrap();
         assert_eq!(
-            get_message_objects(&mut connection, "urn:cid:message2")
+            get_message_bodies(&mut connection, "urn:cid:message2")
                 .await
                 .unwrap(),
-            ["urn:cid:object1", "urn:cid:object2"]
+            ["urn:cid:body1", "urn:cid:body2"]
         );
         assert_eq!(
-            get_object_messages(&mut connection, "urn:cid:object1")
+            get_body_messages(&mut connection, "urn:cid:body1")
                 .await
                 .unwrap(),
             ["urn:cid:message1", "urn:cid:message2"]
         );
-        assert!(has_message_with_object(&mut connection, "urn:cid:object1")
+        assert!(has_message_with_body(&mut connection, "urn:cid:body1")
             .await
             .unwrap());
-        assert!(has_message_with_object(&mut connection, "urn:cid:object2")
+        assert!(has_message_with_body(&mut connection, "urn:cid:body2")
             .await
             .unwrap());
-        assert!(has_message_with_object(&mut connection, "urn:cid:object3")
+        assert!(has_message_with_body(&mut connection, "urn:cid:body3")
             .await
             .unwrap());
-        assert!(!has_message_with_object(&mut connection, "urn:cid:object4")
+        assert!(!has_message_with_body(&mut connection, "urn:cid:body4")
             .await
             .unwrap());
     }

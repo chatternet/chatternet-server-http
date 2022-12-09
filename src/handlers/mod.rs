@@ -78,6 +78,8 @@ mod test_utils {
     use axum::body::Body;
     use axum::http::{self, Request, Response};
     use axum::routing::Router;
+    use chatternet::didkey::did_from_jwk;
+    use chatternet::model::{ActivityType, Message};
     use hyper;
     use hyper::body::HttpBody;
     use mime;
@@ -88,8 +90,6 @@ mod test_utils {
     use tokio::sync::RwLock;
 
     use super::build_api;
-    use crate::chatternet::activities::{ActivityType, Message};
-    use crate::chatternet::didkey;
     use crate::db::Connector;
 
     pub const NO_VEC: Option<&Vec<String>> = None;
@@ -101,7 +101,7 @@ mod test_utils {
         audience: Option<&impl Serialize>,
         jwk: &JWK,
     ) -> Message {
-        let did = didkey::did_from_jwk(jwk).unwrap();
+        let did = did_from_jwk(jwk).unwrap();
         let members = json!({
             "to": to,
             "cc": cc,
@@ -114,17 +114,16 @@ mod test_utils {
             &did,
             &[object_id],
             ActivityType::Create,
-            None,
-            Some(members),
             &jwk,
+            Some(members),
         )
         .await
         .unwrap()
     }
 
     pub async fn build_follow(follows_id: &[&str], jwk: &JWK) -> Message {
-        let did = didkey::did_from_jwk(jwk).unwrap();
-        Message::new(&did, follows_id, ActivityType::Follow, None, None, &jwk)
+        let did = did_from_jwk(jwk).unwrap();
+        Message::new(&did, follows_id, ActivityType::Follow, &jwk, None)
             .await
             .unwrap()
     }

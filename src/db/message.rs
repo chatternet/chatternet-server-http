@@ -7,7 +7,7 @@ pub async fn create_messages(connection: &mut SqliteConnection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS `Messages` \
         (\
             `idx` INTEGER PRIMARY KEY AUTOINCREMENT,
-            `message_id` TEXT NOT NULL, \
+            `message_id` TEXT UNIQUE NOT NULL, \
             `actor_id` TEXT NOT NULL\
         );\
         ",
@@ -40,7 +40,7 @@ pub async fn put_message_id(
 ) -> Result<()> {
     sqlx::query(
         "\
-        INSERT INTO `Messages` \
+        INSERT OR IGNORE INTO `Messages` \
         (`message_id`, `actor_id`) \
         VALUES($1, $2)\
         ",

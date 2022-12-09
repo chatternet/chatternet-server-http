@@ -16,7 +16,7 @@ pub async fn create_objects(connection: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-pub async fn put_object(
+pub async fn put_object_if_new(
     connection: &mut SqliteConnection,
     object_id: &str,
     object: &str,
@@ -24,6 +24,25 @@ pub async fn put_object(
     sqlx::query(
         "\
         INSERT OR IGNORE INTO `Objects` \
+        (`object_id`, `object`) \
+        VALUES($1, $2);\
+        ",
+    )
+    .bind(object_id)
+    .bind(object)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+pub async fn put_object(
+    connection: &mut SqliteConnection,
+    object_id: &str,
+    object: &str,
+) -> Result<()> {
+    sqlx::query(
+        "\
+        REPLACE INTO `Objects` \
         (`object_id`, `object`) \
         VALUES($1, $2);\
         ",
@@ -67,7 +86,32 @@ mod test {
             get_object(&mut connection, "id:1").await.unwrap(),
             Some("object".to_string())
         );
-        // doesn't complain on subsequent insert
-        put_object(&mut connection, "id:1", "object").await.unwrap();
+        put_object(&mut connection, "id:1", "object2")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_object(&mut connection, "id:1").await.unwrap(),
+            Some("object2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn db_puts_an_object_if_new() {
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
+        put_object_if_new(&mut connection, "id:1", "object")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_object(&mut connection, "id:1").await.unwrap(),
+            Some("object".to_string())
+        );
+        put_object_if_new(&mut connection, "id:1", "object2")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_object(&mut connection, "id:1").await.unwrap(),
+            Some("object".to_string())
+        );
     }
 }

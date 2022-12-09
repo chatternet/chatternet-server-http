@@ -1,16 +1,19 @@
 use anyhow::{anyhow, Result};
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
+use chatternet::didkey::actor_id_from_did;
+use chatternet::model::{ActivityType, Message};
 use sqlx::SqliteConnection;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::chatternet::activities::{actor_id_from_did, ActivityType, Message};
 use crate::db::{self, Connector};
 
 pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
     if message
+        .no_id
+        .no_proof
         .members
         .as_ref()
         .map(|x| x.contains_key("bcc"))
@@ -19,6 +22,8 @@ pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
         Err(anyhow!("message contains bcc which cannot be handled"))?;
     }
     if message
+        .no_id
+        .no_proof
         .members
         .as_ref()
         .map(|x| x.contains_key("bto"))
@@ -28,6 +33,8 @@ pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
     }
 
     let tos_id: Option<Vec<String>> = message
+        .no_id
+        .no_proof
         .members
         .as_ref()
         .and_then(|x| x.get("to"))
@@ -39,6 +46,8 @@ pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
         });
 
     let ccs_id = message
+        .no_id
+        .no_proof
         .members
         .as_ref()
         .and_then(|x| x.get("cc"))
@@ -50,6 +59,8 @@ pub fn build_audiences_id(message: &Message) -> Result<Vec<String>> {
         });
 
     let audiences_id = message
+        .no_id
+        .no_proof
         .members
         .as_ref()
         .and_then(|x| x.get("audience"))
@@ -71,8 +82,14 @@ async fn handle_follow(
     message: &Message,
     connection: &mut SqliteConnection,
 ) -> Result<(), AppError> {
-    let actor_id = message.actor.as_str();
-    let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
+    let actor_id = message.no_id.no_proof.actor.as_str();
+    let objects_id: Vec<&str> = message
+        .no_id
+        .no_proof
+        .object
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
     for object_id in objects_id {
         db::put_actor_following(&mut *connection, &actor_id, &object_id)
             .await
@@ -95,7 +112,7 @@ pub async fn handle_actor_outbox(
     Json(message): Json<Message>,
 ) -> Result<StatusCode, AppError> {
     let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
-    if actor_id != message.actor.as_str() {
+    if actor_id != message.no_id.no_proof.actor.as_str() {
         Err(AppError::ActorIdWrong)?;
     }
 
@@ -107,7 +124,8 @@ pub async fn handle_actor_outbox(
         .map_err(|_| AppError::DbConnectionFailed)?;
 
     // if already known, take no actions
-    let message_id = message
+    let message_id = message.id.to_string();
+    message
         .verify()
         .await
         .map_err(|_| AppError::MessageNotValid)?;
@@ -119,7 +137,7 @@ pub async fn handle_actor_outbox(
     };
 
     // run type-dependent side effects
-    match message.message_type {
+    match message.no_id.no_proof.message_type {
         // activity expresses a follow relationship
         ActivityType::Follow => handle_follow(&message, &mut *connection).await?,
         _ => (),
@@ -134,16 +152,22 @@ pub async fn handle_actor_outbox(
     }
 
     // associate this message with its objects so they can be stored later
-    let objects_id: Vec<&str> = message.object.iter().map(|x| x.as_str()).collect();
+    let objects_id: Vec<&str> = message
+        .no_id
+        .no_proof
+        .object
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
     for object_id in objects_id {
-        db::put_message_object(&mut *connection, &message_id, object_id)
+        db::put_message_body(&mut *connection, &message_id, object_id)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
 
     // store the message itself
     let message = serde_json::to_string(&message).map_err(|_| AppError::MessageNotValid)?;
-    db::put_object(&mut *connection, &message_id, &message)
+    db::put_object_if_new(&mut *connection, &message_id, &message)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     db::put_message_id(&mut *connection, &message_id, &actor_id)
@@ -157,19 +181,19 @@ pub async fn handle_actor_outbox(
 mod test {
     use std::str::FromStr;
 
+    use chatternet::model::Collection;
     use ssi::vc::URI;
     use tokio;
     use tower::ServiceExt;
 
-    use crate::chatternet::activities::Collection;
-    use crate::chatternet::didkey;
+    use chatternet::didkey::{build_jwk, did_from_jwk};
 
     use super::super::test_utils::*;
     use super::*;
 
     #[tokio::test]
     async fn builds_audiences_id() {
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let audiences_id = build_audiences_id(
             &build_message(
                 "id:1",
@@ -196,8 +220,8 @@ mod test {
     async fn handles_message() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = api
@@ -227,7 +251,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &message.id.as_ref().unwrap().as_str()),
+                &format!("/api/ap/{}", &message.id.as_str()),
             ))
             .await
             .unwrap();
@@ -243,7 +267,7 @@ mod test {
     async fn rejects_wrong_did() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let response = api
@@ -262,12 +286,12 @@ mod test {
     async fn rejects_invalid_message() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
         let message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
 
         let mut message_2 = message.clone();
-        message_2.id = Some(URI::from_str("id:a").unwrap());
+        message_2.id = URI::from_str("id:a").unwrap();
         let response = api
             .clone()
             .oneshot(request_json(
@@ -284,10 +308,10 @@ mod test {
     async fn rejects_with_bcc() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
         let mut message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
-        message.members.as_mut().and_then(|x| {
+        message.no_id.no_proof.members.as_mut().and_then(|x| {
             x.insert(
                 "bcc".to_string(),
                 serde_json::to_value("did:example:a").unwrap(),
@@ -310,10 +334,10 @@ mod test {
     async fn rejects_with_bto() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
         let mut message = build_message("id:1", NO_VEC, NO_VEC, NO_VEC, &jwk).await;
-        message.members.as_mut().and_then(|x| {
+        message.no_id.no_proof.members.as_mut().and_then(|x| {
             x.insert(
                 "bto".to_string(),
                 serde_json::to_value("did:example:a").unwrap(),
@@ -336,8 +360,8 @@ mod test {
     async fn handles_follow_get_following() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
         let message = build_follow(&["tag:1", "tag:2"], &jwk).await;
         let response = api

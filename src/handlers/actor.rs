@@ -1,7 +1,7 @@
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
-use chatternet::actor_id_from_dida;
+use chatternet::didkey::actor_id_from_did;
 use chatternet::model::{Actor, Collection, CollectionType};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -45,7 +45,7 @@ pub async fn handle_actor_post(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
     // the posted Actor Object must have the same ID as that in the path
-    if actor.id.as_str() != actor_id {
+    if actor.no_proof.id.as_str() != actor_id {
         Err(AppError::ActorIdWrong)?;
     }
     if !actor.verify().await.is_ok() {
@@ -88,8 +88,8 @@ mod test {
     use tokio;
     use tower::ServiceExt;
 
-    use crate::chatternet::activities::{Actor, ActorType};
-    use crate::chatternet::didkey;
+    use chatternet::didkey::{build_jwk, did_from_jwk};
+    use chatternet::model::{Actor, ActorNoProof, ActorType};
 
     use super::super::test_utils::*;
 
@@ -97,11 +97,11 @@ mod test {
     async fn updates_and_gets_actor() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
         let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
-        let actor = Actor::new(did.to_string(), ActorType::Person, Some(members), &jwk)
+        let actor = Actor::new(did.to_string(), ActorType::Person, &jwk, Some(members))
             .await
             .unwrap();
 
@@ -124,18 +124,18 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let actor_back: Option<Actor> = get_body(response).await;
         let actor_back = actor_back.unwrap();
-        assert_eq!(actor_back.id, actor.id);
+        assert_eq!(actor_back.no_proof.id, actor.no_proof.id);
     }
 
     #[tokio::test]
     async fn wont_update_invalid_actor() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
         let members = json!({"name": "abc"}).as_object().unwrap().to_owned();
-        let actor = Actor::new(did.to_string(), ActorType::Person, Some(members), &jwk)
+        let actor = Actor::new(did.to_string(), ActorType::Person, &jwk, Some(members))
             .await
             .unwrap();
 
@@ -147,15 +147,22 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        // signature doesn't match contents
-        let mut actor_invalid = actor.clone();
-        actor_invalid.members = Some(json!({"name": "abcd"}).as_object().unwrap().to_owned());
+        // build an invalid actor
+        let members = json!({"name": "abcd"}).as_object().unwrap().to_owned();
+        let actor = Actor {
+            proof: actor.proof,
+            no_proof: ActorNoProof {
+                members: Some(members),
+                ..actor.no_proof
+            },
+        };
+
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor", did),
-                &actor_invalid,
+                &actor,
             ))
             .await
             .unwrap();
