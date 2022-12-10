@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use axum;
-use chatternet_server_http::chatternet::didkey::{build_jwk, did_from_jwk};
+use chatternet::didkey::{build_jwk, did_from_jwk};
 use clap::Parser;
 use serde::Serialize;
 use serde_json;

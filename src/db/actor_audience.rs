@@ -2,11 +2,14 @@ use anyhow::Result;
 use futures::TryStreamExt;
 use sqlx::{Row, SqliteConnection};
 
+use super::joint_id;
+
 pub async fn create_actors_audiences(connection: &mut SqliteConnection) -> Result<()> {
     sqlx::query(
         "\
         CREATE TABLE IF NOT EXISTS `ActorsAudiences` \
         (\
+            `joint_id` TEXT PRIMARY KEY, \
             `actor_id` TEXT NOT NULL, \
             `audience_id` TEXT NOT NULL\
         );\
@@ -41,11 +44,12 @@ pub async fn put_actor_audience(
 ) -> Result<()> {
     sqlx::query(
         "\
-        INSERT INTO `ActorsAudiences` \
-        (`actor_id`, `audience_id`) \
-        VALUES($1, $2);\
+        INSERT OR IGNORE INTO `ActorsAudiences` \
+        (`joint_id`, `actor_id`, `audience_id`) \
+        VALUES($1, $2, $3);\
         ",
     )
+    .bind(joint_id(&[actor_id, audience_id]))
     .bind(actor_id)
     .bind(audience_id)
     .execute(&mut *connection)

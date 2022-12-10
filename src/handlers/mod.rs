@@ -10,14 +10,14 @@ use tower_http::trace::TraceLayer;
 use crate::db::Connector;
 
 mod actor;
+mod documents;
 mod error;
 mod inbox;
-mod object;
 mod outbox;
 
 use actor::*;
+use documents::*;
 use inbox::*;
-use object::*;
 use outbox::*;
 
 #[derive(Serialize)]
@@ -51,8 +51,7 @@ pub fn build_api(connector: Arc<RwLock<Connector>>, prefix: &str, _did: &str) ->
                         .route("/:id/actor/following", get(handle_actor_following))
                         .route("/:id/actor/outbox", post(handle_actor_outbox))
                         .route("/:id/actor/inbox", get(handle_inbox))
-                        // post and get a generic object
-                        .route("/:id", get(handle_object_get).post(handle_object_post)),
+                        .route("/:id", get(handle_document_get).post(handle_body_post)),
                 ),
         )
         .layer(TraceLayer::new_for_http())
@@ -78,55 +77,55 @@ mod test_utils {
     use axum::body::Body;
     use axum::http::{self, Request, Response};
     use axum::routing::Router;
+    use chatternet::model::{ActivityType, MessageFields};
     use hyper;
     use hyper::body::HttpBody;
     use mime;
     use serde::de::DeserializeOwned;
     use serde::Serialize;
-    use serde_json::json;
     use ssi::jwk::JWK;
+    use ssi::vc::URI;
     use tokio::sync::RwLock;
 
     use super::build_api;
-    use crate::chatternet::activities::{ActivityType, Message};
-    use crate::chatternet::didkey;
     use crate::db::Connector;
 
-    pub const NO_VEC: Option<&Vec<String>> = None;
-
     pub async fn build_message(
-        object_id: &str,
-        to: Option<&impl Serialize>,
-        cc: Option<&impl Serialize>,
-        audience: Option<&impl Serialize>,
         jwk: &JWK,
-    ) -> Message {
-        let did = didkey::did_from_jwk(jwk).unwrap();
-        let members = json!({
-            "to": to,
-            "cc": cc,
-            "audience": audience,
-        })
-        .as_object()
-        .unwrap()
-        .to_owned();
-        Message::new(
-            &did,
-            &[object_id],
-            ActivityType::Create,
-            None,
-            Some(members),
+        document_id: &str,
+        to: Option<Vec<String>>,
+        cc: Option<Vec<String>>,
+        audience: Option<Vec<String>>,
+    ) -> MessageFields {
+        let to = to.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
+        let cc = cc.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
+        let audience =
+            audience.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
+        MessageFields::new(
             &jwk,
+            ActivityType::Create,
+            &[document_id],
+            to,
+            cc,
+            audience,
+            None,
         )
         .await
         .unwrap()
     }
 
-    pub async fn build_follow(follows_id: &[&str], jwk: &JWK) -> Message {
-        let did = didkey::did_from_jwk(jwk).unwrap();
-        Message::new(&did, follows_id, ActivityType::Follow, None, None, &jwk)
-            .await
-            .unwrap()
+    pub async fn build_follow(follows_id: &[&str], jwk: &JWK) -> MessageFields {
+        MessageFields::new(
+            &jwk,
+            ActivityType::Follow,
+            follows_id,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     pub async fn get_body<T, U>(response: Response<T>) -> U
@@ -143,7 +142,11 @@ mod test_utils {
         Body::from(serde_json::to_string(value).unwrap())
     }
 
-    pub fn request_json(method: &str, uri: &str, value: &impl Serialize) -> Request<Body> {
+    pub fn request_json(
+        method: &str,
+        uri: &str,
+        value: &(impl Serialize + ?Sized),
+    ) -> Request<Body> {
         Request::builder()
             .method(method)
             .uri(uri)

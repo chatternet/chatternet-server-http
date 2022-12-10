@@ -8,23 +8,26 @@ Warning: Chatter Net is currently in the prototype phase. Features are missing, 
 
 This repository hosts a server implementation based on the HTTP protocol.
 
+## Structure
+
+### ChatterNet
+
+The Chatter Net crate is included as a cargo workspace member.
+It will be split out as a separate library once the interfaces are more stable.
+
+This crate contains a partial implementation of ChatterNet data model.
+
+### db
+
+The [`db`] module provides an interface for persisting chatter net objects using sqlite.
+The tables and interfaces serve the needs of a ChatterNet server, as opposed to a client.
+In particular, the server must be able to build the inbox for any actor.
+
+### handlers
+
+The [`handlers`] module provides interfaces for handling requests and updating the state accordingly.
+
 ## TODO
 
-This code base is a work-in-progress.
-Here are some important next steps:
-
-- Change server to axum, or nest the warp path filters to get more sensible errors.
-  - Compilation times are a bit slow with warp.
-  - The filter system can lead to subtle errors (on the part of the programmer).
-- Stores messages along side objects.
-  - Messages are just another form of objects,
-    the distinction currently can lead to duplicate code and unnecessary branching.
-- Deletions.
-
-In the medium term, the SQL queries are likely to lead to many bottle necks and improvements can be made:
-
-- Consider query planning.
-- The inbox get query is very heavy and will be used often (maybe 10x more than the outbox post),
-  some better structures or caching could help.
-
-In the long term, it would nice for this server to expose a Mastodon-compatible API.
+- use foreign indices to synchronize document store with other stores
+- use transactions for multi-part DB state changes

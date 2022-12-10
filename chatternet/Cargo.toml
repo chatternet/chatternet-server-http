@@ -1,44 +1,20 @@
 [package]
-name = "chatternet-server-http"
+name = "chatternet"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-activitystreams-kinds = "0.2.1"
 anyhow = "1.0.66"
 async-trait = "0.1.58"
-axum = "0.6.1"
-base64 = "0.13.1"
-chatternet = { path = "chatternet" }
 chrono = "0.4.22"
 cid = "0.8.6"
-clap = { version = "4.0.18", features = ["derive"] }
 did-method-key = { git = "https://github.com/spruceid/ssi", rev="80be3ef98a68db75b5e8af32b258bc9d64374305" }
 ed25519-dalek = "1.0.1"
-futures = "0.3.25"
-log = "0.4.17"
-pretty_env_logger = "0.4.0"
 rand = "0.8.5"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.87"
-sha2 = "0.10.6"
-sqlx = { version = "0.6.2", features = ["runtime-tokio-native-tls", "sqlite"] }
 ssi = { git = "https://github.com/spruceid/ssi", rev="80be3ef98a68db75b5e8af32b258bc9d64374305" }
 tap = "1.0.1"
 tokio = { version = "1.21.2", features = ["full"] }
-tower-http = { version = "0.3.5", features = ["trace", "cors"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.16"
-
-[dev-dependencies]
-hyper = { version = "0.14.23", features = ["full"] }
-mime = "0.3.16"
-tower = "0.4.13"
-
-[workspace]
-members = [
-    "chatternet",
-]
-

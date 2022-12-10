@@ -1,3 +1,7 @@
+//! Handle modifying documents.
+//!
+//! Documents include messages and bodies. Actors are handled separately.
+
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
@@ -8,14 +12,19 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::chatternet::activities::Object;
 use crate::db::{self, Connector};
+use chatternet::model::{Body, BodyFields};
 
-pub async fn handle_object_get(
+/// Handle a get request for a document with ID `id`.
+///
+/// Generates a DID document if a the ID is a DID, otherwise will lookup
+/// the ID in the document table.
+pub async fn handle_document_get(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     // if this is just a DID, generate its corresponding DID document
+    // note that IDs with the `/actor` suffix is handled in a different route
     if id.starts_with("did:key:") {
         let (_, document, _) = DIDKey
             .resolve(&id, &ResolutionInputMetadata::default())
@@ -33,19 +42,21 @@ pub async fn handle_object_get(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
 
-    let object = db::get_object(&mut connection, &id).await;
-    if let Ok(Some(object)) = object {
-        let object: Value = serde_json::from_str(&object).map_err(|_| AppError::ObjectNotValid)?;
-        return Ok(Json(object));
+    let document = db::get_document(&mut connection, &id).await;
+    if let Ok(Some(document)) = document {
+        let document: Value =
+            serde_json::from_str(&document).map_err(|_| AppError::DocumentNotValid)?;
+        return Ok(Json(document));
     }
 
-    Err(AppError::ObjectNotKnown)?
+    Err(AppError::DocumentNotKnown)?
 }
 
-pub async fn handle_object_post(
+/// Handle a post request for a message body `body` with ID `id`.
+pub async fn handle_body_post(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(id): Path<String>,
-    Json(object): Json<Object>,
+    Json(body): Json<BodyFields>,
 ) -> Result<StatusCode, AppError> {
     let mut connector = connector.write().await;
     let mut connection = connector
@@ -53,23 +64,22 @@ pub async fn handle_object_post(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
 
-    if object.id.as_ref().map(|x| x.as_str() != id).unwrap_or(true) {
-        Err(AppError::ObjectIdWrong)?;
+    if body.id().as_str() != id {
+        Err(AppError::DocumentIdWrong)?;
     }
-    // server doesn't accept unsigned data, since objects are unsigned, the
-    // server must first know about a (signed) message that has that object
-    if !db::has_object(&mut *connection, &id)
+    // only accept body if a known (signed) message is associated with it
+    if !db::has_message_with_body(&mut *connection, &id)
         .await
         .map_err(|_| AppError::DbQueryFailed)?
     {
-        Err(AppError::ObjectNotKnown)?;
+        Err(AppError::DocumentNotKnown)?;
     }
-    // validate the object CID
-    if !object.verify().await.is_ok() {
-        Err(AppError::ObjectNotValid)?;
+    // validate the body CID
+    if !body.verify().await.is_ok() {
+        Err(AppError::DocumentNotValid)?;
     }
-    let object = serde_json::to_string(&object).map_err(|_| AppError::ObjectNotValid)?;
-    db::put_or_update_object(&mut *connection, &id, Some(&object))
+    let body = serde_json::to_string(&body).map_err(|_| AppError::DocumentNotValid)?;
+    db::put_document(&mut *connection, &id, &body)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     Ok(StatusCode::OK)
@@ -77,28 +87,28 @@ pub async fn handle_object_post(
 
 #[cfg(test)]
 mod test {
-    use axum::body::Body;
+    use axum::body::Body as HttpBody;
     use axum::http::{Request, StatusCode};
-    use serde_json::json;
+    use tap::Pipe;
     use tokio;
     use tower::ServiceExt;
 
-    use crate::chatternet::activities::{Object, ObjectType};
-    use crate::chatternet::didkey;
+    use chatternet::didkey::{build_jwk, did_from_jwk};
+    use chatternet::model::{Body, BodyFields, BodyType};
 
     use super::super::test_utils::*;
 
     #[tokio::test]
     async fn builds_did_document() {
         let api = build_test_api().await;
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
         let response = api
             .oneshot(
                 Request::builder()
                     .method("GET")
                     .uri(format!("/api/ap/{}", did))
-                    .body(Body::empty())
+                    .body(HttpBody::empty())
                     .unwrap(),
             )
             .await
@@ -129,17 +139,17 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_object_updates_and_gets() {
+    async fn body_updates_and_gets() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
-        let object = Object::new(ObjectType::Note, None).await.unwrap();
-        let object_id = object.id.as_ref().unwrap().as_str();
-        let message = build_message(object_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let body = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let body_id = body.id().as_str();
+        let message = build_message(&jwk, body_id, None, None, None).await;
 
-        // post a message so that the server knows about the object
+        // post a message so that the server knows about the body
         let response = api
             .clone()
             .oneshot(request_json(
@@ -151,40 +161,36 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // now possible to post the object on the server
+        // now possible to post the body on the server
         let response = api
             .clone()
-            .oneshot(request_json(
-                "POST",
-                &format!("/api/ap/{}", object_id),
-                &object,
-            ))
+            .oneshot(request_json("POST", &format!("/api/ap/{}", body_id), &body))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // server returns the object
+        // server returns the body
         let response = api
             .clone()
-            .oneshot(request_empty("GET", &format!("/api/ap/{}", object_id)))
+            .oneshot(request_empty("GET", &format!("/api/ap/{}", body_id)))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let object_back: Option<Object> = get_body(response).await;
-        let object_back = object_back.unwrap();
-        assert_eq!(object_back.id, object.id);
+        let body_back: Option<BodyFields> = get_body(response).await;
+        let body_back = body_back.unwrap();
+        assert_eq!(body_back.id(), body.id());
     }
 
     #[tokio::test]
-    async fn api_object_wont_update_invalid_object() {
+    async fn wont_update_invalid_body() {
         let api = build_test_api().await;
 
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = didkey::did_from_jwk(&jwk).unwrap();
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
 
-        let object = Object::new(ObjectType::Note, None).await.unwrap();
-        let object_id = object.id.as_ref().unwrap().as_str();
-        let message = build_message(object_id, NO_VEC, NO_VEC, NO_VEC, &jwk).await;
+        let body = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let body_id = body.id().as_str();
+        let message = build_message(&jwk, body_id, None, None, None).await;
 
         let response = api
             .clone()
@@ -200,20 +206,27 @@ mod test {
         // posting to wrong ID
         let response = api
             .clone()
-            .oneshot(request_json("POST", "/api/ap/urn:cid:invalid", &object))
+            .oneshot(request_json("POST", "/api/ap/urn:cid:invalid", &body))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        // object contents don't match ID
-        let mut object_invalid = object.clone();
-        object_invalid.members = Some(json!({"content": "abcd"}).as_object().unwrap().to_owned());
+        // body contents don't match ID
+        let mut invalid = serde_json::to_value(&body).unwrap();
+        invalid.get_mut("content").map(|x| {
+            *x = "abcd"
+                .to_string()
+                .pipe(Some)
+                .pipe(serde_json::to_value)
+                .unwrap()
+        });
+
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", object_id),
-                &object_invalid,
+                &format!("/api/ap/{}", body_id),
+                &invalid,
             ))
             .await
             .unwrap();
@@ -221,7 +234,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_object_wont_get_unknown() {
+    async fn wont_get_unknown() {
         let api = build_test_api().await;
         let response = api
             .clone()
@@ -232,16 +245,16 @@ mod test {
     }
 
     #[tokio::test]
-    async fn api_object_wont_post_unknown() {
+    async fn wont_post_unknown() {
         let api = build_test_api().await;
-        let object = Object::new(ObjectType::Note, None).await.unwrap();
-        let object_id = object.id.as_ref().unwrap().as_str();
+        let document = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let document_id = document.id().as_str();
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", object_id),
-                &object,
+                &format!("/api/ap/{}", document_id),
+                &document,
             ))
             .await
             .unwrap();

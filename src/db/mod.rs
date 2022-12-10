@@ -2,21 +2,35 @@ use std::str::FromStr;
 
 use anyhow::Result;
 use futures::TryStreamExt;
+use sha2::{Digest, Sha256};
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
 
 mod actor_audience;
-mod following;
+mod actor_following;
+mod documents;
 mod message;
 mod message_audience;
-mod object;
+mod message_body;
 
 pub use actor_audience::*;
-pub use following::*;
+pub use actor_following::*;
+pub use documents::*;
 pub use message::*;
 pub use message_audience::*;
-pub use object::*;
+pub use message_body::*;
+
+fn joint_id(ids: &[&str]) -> String {
+    // IDs are generic, one ID could contain many IDs, so need to use a
+    // separator not included in the IDs. JSON does this by encoding the IDs
+    // into `"` escaped strings.
+    let ids = serde_json::to_string(ids).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(ids.as_bytes());
+    let hash = hasher.finalize();
+    base64::encode(hash)
+}
 
 pub async fn get_inbox_for_actor(
     connection: &mut SqliteConnection,
@@ -26,9 +40,9 @@ pub async fn get_inbox_for_actor(
 ) -> Result<Vec<String>> {
     let query_str = format!(
         "\
-        SELECT `object` FROM `Objects` \
+        SELECT `document` FROM `Documents` \
         INNER JOIN `Messages` \
-        ON `Objects`.`object_id` = `Messages`.`message_id` \
+        ON `Documents`.`document_id` = `Messages`.`message_id` \
         WHERE (\
             `Messages`.`actor_id` = $1
             OR `Messages`.`actor_id` IN (\
@@ -69,7 +83,7 @@ pub async fn get_inbox_for_actor(
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
     while let Some(row) = rows.try_next().await? {
-        let message: &str = row.try_get("object")?;
+        let message: &str = row.try_get("document")?;
         messages.push(message.to_string());
     }
     Ok(messages)
@@ -93,9 +107,10 @@ impl Connector {
         let mut connection = pool_write.acquire().await?;
         create_messages(&mut *connection).await?;
         create_messages_audiences(&mut *connection).await?;
+        create_messages_bodies(&mut *connection).await?;
         create_actors_audiences(&mut *connection).await?;
         create_actor_following(&mut *connection).await?;
-        create_objects(&mut *connection).await?;
+        create_documents(&mut *connection).await?;
 
         let pool_read = if url == "sqlite::memory:" {
             None
@@ -137,12 +152,21 @@ mod test {
 
     use super::*;
 
+    #[test]
+    fn builds_a_joint_id() {
+        let id = joint_id(&["a", "b"]);
+        // re-calculates the same id
+        assert_eq!(id, joint_id(&["a", "b"]));
+        // differs from simply joining the IDs
+        assert_ne!(id, joint_id(&["ab"]));
+    }
+
     #[tokio::test]
     async fn db_gets_inbox_for_actor() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
 
-        put_or_update_object(&mut connection, "id:1", Some("message 1"))
+        put_document(&mut connection, "id:1", "message 1")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:1", "did:1/actor")
@@ -152,7 +176,7 @@ mod test {
             .await
             .unwrap();
 
-        put_or_update_object(&mut connection, "id:2", Some("message 2"))
+        put_document(&mut connection, "id:2", "message 2")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:2", "did:1/actor")
@@ -162,7 +186,7 @@ mod test {
             .await
             .unwrap();
 
-        put_or_update_object(&mut connection, "id:3", Some("message 3"))
+        put_document(&mut connection, "id:3", "message 3")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:3", "did:2/actor")
@@ -172,7 +196,7 @@ mod test {
             .await
             .unwrap();
 
-        put_or_update_object(&mut connection, "id:4", Some("message 4"))
+        put_document(&mut connection, "id:4", "message 4")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:4", "did:2/actor")
