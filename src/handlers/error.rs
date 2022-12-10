@@ -9,9 +9,9 @@ pub enum AppError {
     ActorNotKnown,
     ActorNotValid,
     ActorIdWrong,
-    ObjectNotKnown,
-    ObjectNotValid,
-    ObjectIdWrong,
+    DocumentNotKnown,
+    DocumentNotValid,
+    DocumentIdWrong,
     MessageNotValid,
 }
 
@@ -27,9 +27,9 @@ impl IntoResponse for AppError {
             Self::ActorNotKnown => (StatusCode::NOT_FOUND, "actor is not known"),
             Self::ActorNotValid => (StatusCode::BAD_REQUEST, "actor is not valid"),
             Self::ActorIdWrong => (StatusCode::BAD_REQUEST, "actor ID is wrong"),
-            Self::ObjectNotKnown => (StatusCode::NOT_FOUND, "object is not known"),
-            Self::ObjectNotValid => (StatusCode::BAD_REQUEST, "object is not valid"),
-            Self::ObjectIdWrong => (StatusCode::BAD_REQUEST, "object ID is wrong"),
+            Self::DocumentNotKnown => (StatusCode::NOT_FOUND, "document is not known"),
+            Self::DocumentNotValid => (StatusCode::BAD_REQUEST, "document is not valid"),
+            Self::DocumentIdWrong => (StatusCode::BAD_REQUEST, "document ID is wrong"),
             Self::MessageNotValid => (StatusCode::BAD_REQUEST, "message is not valid"),
         }
         .into_response()

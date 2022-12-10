@@ -12,23 +12,22 @@ This repository hosts a server implementation based on the HTTP protocol.
 
 ### ChatterNet
 
-The `ChatterNet` crate is included as a cargo workspace member.
+The Chatter Net crate is included as a cargo workspace member.
 It will be split out as a separate library once the interfaces are more stable.
 
 This crate contains a partial implementation of ChatterNet data model.
 
 ### db
 
-The `db` module provides an interface for persisting chatter net objects using sqlite.
+The [`db`] module provides an interface for persisting chatter net objects using sqlite.
 The tables and interfaces serve the needs of a ChatterNet server, as opposed to a client.
 In particular, the server must be able to build the inbox for any actor.
 
 ### handlers
 
-The `handlers` module provides interfaces for handling requests and updating the state accordingly.
+The [`handlers`] module provides interfaces for handling requests and updating the state accordingly.
 
 ## TODO
 
-- switch Message, Actor, Body to interfaces
 - use foreign indices to synchronize document store with other stores
 - use transactions for multi-part DB state changes

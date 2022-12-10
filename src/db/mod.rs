@@ -9,17 +9,17 @@ use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
 
 mod actor_audience;
 mod actor_following;
+mod documents;
 mod message;
 mod message_audience;
 mod message_body;
-mod object;
 
 pub use actor_audience::*;
 pub use actor_following::*;
+pub use documents::*;
 pub use message::*;
 pub use message_audience::*;
 pub use message_body::*;
-pub use object::*;
 
 fn joint_id(ids: &[&str]) -> String {
     // IDs are generic, one ID could contain many IDs, so need to use a
@@ -40,9 +40,9 @@ pub async fn get_inbox_for_actor(
 ) -> Result<Vec<String>> {
     let query_str = format!(
         "\
-        SELECT `object` FROM `Objects` \
+        SELECT `document` FROM `Documents` \
         INNER JOIN `Messages` \
-        ON `Objects`.`object_id` = `Messages`.`message_id` \
+        ON `Documents`.`document_id` = `Messages`.`message_id` \
         WHERE (\
             `Messages`.`actor_id` = $1
             OR `Messages`.`actor_id` IN (\
@@ -83,7 +83,7 @@ pub async fn get_inbox_for_actor(
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
     while let Some(row) = rows.try_next().await? {
-        let message: &str = row.try_get("object")?;
+        let message: &str = row.try_get("document")?;
         messages.push(message.to_string());
     }
     Ok(messages)
@@ -110,7 +110,7 @@ impl Connector {
         create_messages_bodies(&mut *connection).await?;
         create_actors_audiences(&mut *connection).await?;
         create_actor_following(&mut *connection).await?;
-        create_objects(&mut *connection).await?;
+        create_documents(&mut *connection).await?;
 
         let pool_read = if url == "sqlite::memory:" {
             None
@@ -166,7 +166,7 @@ mod test {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
 
-        put_object(&mut connection, "id:1", "message 1")
+        put_document(&mut connection, "id:1", "message 1")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:1", "did:1/actor")
@@ -176,7 +176,7 @@ mod test {
             .await
             .unwrap();
 
-        put_object(&mut connection, "id:2", "message 2")
+        put_document(&mut connection, "id:2", "message 2")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:2", "did:1/actor")
@@ -186,7 +186,7 @@ mod test {
             .await
             .unwrap();
 
-        put_object(&mut connection, "id:3", "message 3")
+        put_document(&mut connection, "id:3", "message 3")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:3", "did:2/actor")
@@ -196,7 +196,7 @@ mod test {
             .await
             .unwrap();
 
-        put_object(&mut connection, "id:4", "message 4")
+        put_document(&mut connection, "id:4", "message 4")
             .await
             .unwrap();
         put_message_id(&mut connection, "id:4", "did:2/actor")

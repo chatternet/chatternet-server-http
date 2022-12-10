@@ -1,12 +1,9 @@
-use std::str::FromStr;
-
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use ssi::vc::URI;
 
 use crate::CONTEXT_ACTIVITY_STREAMS;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum CollectionType {
     Collection,
     OrderedCollection,
@@ -14,24 +11,45 @@ pub enum CollectionType {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct Collection<T> {
+pub struct CollectionFields<T> {
     #[serde(rename = "@context")]
-    pub context: Vec<String>,
-    pub id: URI,
+    context: Vec<String>,
+    id: URI,
     #[serde(rename = "type")]
-    pub collection_type: CollectionType,
-    pub items: Vec<T>,
+    type_: CollectionType,
+    items: Vec<T>,
 }
 
-impl<T> Collection<T> {
-    pub fn new(id: &str, collection_type: CollectionType, items: Vec<T>) -> Result<Self> {
-        let id = URI::from_str(id)?;
-        Ok(Collection {
+impl<T> CollectionFields<T> {
+    pub fn new(id: URI, type_: CollectionType, items: Vec<T>) -> Self {
+        CollectionFields {
             context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
             id,
-            collection_type,
+            type_,
             items,
-        })
+        }
+    }
+}
+
+pub trait Colleciton<T> {
+    fn context(&self) -> &Vec<String>;
+    fn id(&self) -> &URI;
+    fn type_(&self) -> CollectionType;
+    fn items(&self) -> &Vec<T>;
+}
+
+impl<T> Colleciton<T> for CollectionFields<T> {
+    fn context(&self) -> &Vec<String> {
+        &self.context
+    }
+    fn id(&self) -> &URI {
+        &self.id
+    }
+    fn type_(&self) -> CollectionType {
+        self.type_
+    }
+    fn items(&self) -> &Vec<T> {
+        &self.items
     }
 }
 
@@ -43,9 +61,12 @@ mod test {
 
     #[tokio::test]
     async fn builds_collection() {
-        let collection =
-            Collection::new("id:a", CollectionType::Collection, vec!["abc", "def"]).unwrap();
-        assert_eq!(collection.items[0], "abc");
-        assert_eq!(collection.items[1], "def");
+        let collection = CollectionFields::new(
+            URI::try_from("id:a".to_string()).unwrap(),
+            CollectionType::Collection,
+            vec!["abc", "def"],
+        );
+        assert_eq!(collection.items()[0], "abc");
+        assert_eq!(collection.items()[1], "def");
     }
 }
