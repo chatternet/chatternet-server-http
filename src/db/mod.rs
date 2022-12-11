@@ -32,15 +32,22 @@ fn joint_id(ids: &[&str]) -> String {
     base64::encode(hash)
 }
 
+#[derive(Debug)]
+pub struct InboxOut {
+    pub messages: Vec<String>,
+    pub low_idx: u64,
+    pub high_idx: u64,
+}
+
 pub async fn get_inbox_for_actor(
     connection: &mut SqliteConnection,
     actor_id: &str,
     count: i64,
-    after: Option<&str>,
-) -> Result<Vec<String>> {
+    start_idx: Option<u64>,
+) -> Result<Option<InboxOut>> {
     let query_str = format!(
         "\
-        SELECT `document` FROM `Documents` \
+        SELECT `idx`, `document` FROM `Documents` \
         INNER JOIN `Messages` \
         ON `Documents`.`document_id` = `Messages`.`message_id` \
         WHERE (\
@@ -62,31 +69,40 @@ pub async fn get_inbox_for_actor(
         ORDER BY `idx` DESC \
         LIMIT $2;\
         ",
-        if after.is_some() {
+        if start_idx.is_some() {
             "\
-            AND `idx` < (\
-                SELECT `idx` FROM `Messages` \
-                WHERE `message_id` = $3\
-            )\
+            AND `idx` <= $3 \
             "
         } else {
             ""
         }
     );
-    let query = match after {
-        Some(after) => sqlx::query(&query_str)
+    let query = match start_idx {
+        Some(start_idx) => sqlx::query(&query_str)
             .bind(actor_id)
             .bind(count)
-            .bind(after),
+            .bind(u32::try_from(start_idx)?),
         None => sqlx::query(&query_str).bind(actor_id).bind(count),
     };
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
+    let mut first_idx: Option<u64> = None;
+    let mut last_idx: Option<u64> = None;
     while let Some(row) = rows.try_next().await? {
         let message: &str = row.try_get("document")?;
+        let idx: u32 = row.try_get("idx")?;
         messages.push(message.to_string());
+        first_idx = first_idx.map(|x| x.min(idx as u64)).or(Some(idx as u64));
+        last_idx = last_idx.map(|x| x.max(idx as u64)).or(Some(idx as u64));
     }
-    Ok(messages)
+    Ok(match (first_idx, last_idx) {
+        (Some(first_idx), Some(last_idx)) => Some(InboxOut {
+            messages,
+            low_idx: first_idx,
+            high_idx: last_idx,
+        }),
+        _ => None,
+    })
 }
 
 pub struct Connector {
@@ -207,61 +223,58 @@ mod test {
             .unwrap();
 
         // did:1 gets messages addressed to self
-        assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
-                .await
-                .unwrap(),
-            ["message 1"]
-        );
+        let out = get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.messages, ["message 1"]);
+        assert_eq!(out.low_idx, 1);
+        assert_eq!(out.high_idx, 1);
 
         // did:1 follows tag:1
         put_actor_audience(&mut connection, "did:1/actor", "tag:1/followers")
             .await
             .unwrap();
-        assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
-                .await
-                .unwrap(),
-            ["message 2", "message 1"]
-        );
+        let out = get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.messages, ["message 2", "message 1"]);
+        assert_eq!(out.low_idx, 1);
+        assert_eq!(out.high_idx, 2);
 
         // did:1 follows did:2
         put_actor_audience(&mut connection, "did:1/actor", "did:2/actor/followers")
             .await
             .unwrap();
+        let out = get_inbox_for_actor(&mut connection, "did:1/actor", 1, None)
+            .await
+            .unwrap()
+            .unwrap();
         // but not a contact of did:2 so can't get messages
-        assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 1, None)
-                .await
-                .unwrap(),
-            ["message 2"]
-        );
+        assert_eq!(out.messages, ["message 2"]);
+        assert_eq!(out.low_idx, 2);
+        assert_eq!(out.high_idx, 2);
 
         // did:1 adds did:2 as a contact
         put_actor_following(&mut connection, "did:1/actor", "did:2/actor")
             .await
             .unwrap();
-        assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
-                .await
-                .unwrap(),
-            ["message 3", "message 2", "message 1"]
-        );
+        let out = get_inbox_for_actor(&mut connection, "did:1/actor", 3, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.messages, ["message 3", "message 2", "message 1"]);
+        assert_eq!(out.low_idx, 1);
+        assert_eq!(out.high_idx, 3);
 
+        let out = get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some(2))
+            .await
+            .unwrap()
+            .unwrap();
         // can paginate
-        assert_eq!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some("id:3"))
-                .await
-                .unwrap(),
-            ["message 2", "message 1"]
-        );
-
-        // can paginate empty
-        assert!(
-            get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some("id:1"))
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(out.messages, ["message 2", "message 1"]);
+        assert_eq!(out.low_idx, 1);
+        assert_eq!(out.high_idx, 2);
     }
 }
