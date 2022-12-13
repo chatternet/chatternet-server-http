@@ -2,42 +2,53 @@ use anyhow::{Error as AnyError, Result};
 use axum::extract::{Json, Path, Query, State};
 use chatternet::{
     didkey::actor_id_from_did,
-    model::{new_inbox, CollectionFields, MessageFields},
+    model::{new_inbox, CollectionPageFields, MessageFields},
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::db::{self, Connector};
+use crate::db::{self, Connector, InboxOut};
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DidInboxQuery {
-    after: Option<String>,
+    start_idx: Option<u64>,
 }
 
 pub async fn handle_inbox(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(did): Path<String>,
     Query(query): Query<DidInboxQuery>,
-) -> Result<Json<CollectionFields<MessageFields>>, AppError> {
+) -> Result<Json<CollectionPageFields<MessageFields>>, AppError> {
     let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
     let connector = connector.read().await;
     let mut connection = connector
         .connection()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
-    let after = query.after.as_ref().map(|x| x.as_str());
-    let messages = db::get_inbox_for_actor(&mut connection, &actor_id, 32, after)
+    let inbox_out = db::get_inbox_for_actor(&mut connection, &actor_id, 32, query.start_idx)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
-    let messages = messages
-        .iter()
-        .map(|x| serde_json::from_str(x).map_err(AnyError::new))
-        .collect::<Result<Vec<MessageFields>>>()
-        .map_err(|_| AppError::DbQueryFailed)?;
-    let inbox = new_inbox(&format!("{}/inbox", actor_id), messages, after)
-        .map_err(|_| AppError::ActorIdWrong)?;
+    let inbox = match inbox_out {
+        Some(InboxOut {
+            messages,
+            low_idx,
+            high_idx,
+        }) => {
+            let messages = messages
+                .iter()
+                .map(|x| serde_json::from_str(x).map_err(AnyError::new))
+                .collect::<Result<Vec<MessageFields>>>()
+                .map_err(|_| AppError::DbQueryFailed)?;
+            let start_idx = query.start_idx.unwrap_or(high_idx);
+            let next_start_idx = if low_idx > 0 { Some(low_idx - 1) } else { None };
+            new_inbox(&actor_id, messages, start_idx, next_start_idx)
+                .map_err(|_| AppError::ActorIdWrong)?
+        }
+        None => new_inbox(&actor_id, vec![], 0, None).map_err(|_| AppError::ActorIdWrong)?,
+    };
     Ok(Json(inbox))
 }
 
@@ -45,7 +56,7 @@ pub async fn handle_inbox(
 mod test {
     use axum::http::StatusCode;
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{Colleciton, Message};
+    use chatternet::model::{CollecitonPage, Message};
     use tokio;
     use tower::ServiceExt;
 
@@ -132,7 +143,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let inbox: CollectionFields<MessageFields> = get_body(response).await;
+        let inbox: CollectionPageFields<MessageFields> = get_body(response).await;
         assert_eq!(
             inbox
                 .items()
@@ -141,6 +152,10 @@ mod test {
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:1"]
+        );
+        assert_eq!(
+            inbox.next().as_ref().unwrap().as_str(),
+            &format!("{}/actor/inbox&startIdx={}", did_1, 0)
         );
 
         // did_1 follows did_2, gets added to did_2 followers
@@ -164,7 +179,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let inbox: CollectionFields<MessageFields> = get_body(response).await;
+        let inbox: CollectionPageFields<MessageFields> = get_body(response).await;
         assert_eq!(
             inbox
                 .items()

@@ -119,7 +119,7 @@ pub async fn handle_actor_outbox(
 
 #[cfg(test)]
 mod test {
-    use chatternet::model::{Colleciton, CollectionFields};
+    use chatternet::model::{Collection, CollectionFields};
     use tokio;
     use tower::ServiceExt;
 
