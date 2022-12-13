@@ -42,7 +42,7 @@ pub struct InboxOut {
 pub async fn get_inbox_for_actor(
     connection: &mut SqliteConnection,
     actor_id: &str,
-    count: i64,
+    count: u64,
     start_idx: Option<u64>,
 ) -> Result<Option<InboxOut>> {
     let query_str = format!(
@@ -80,9 +80,11 @@ pub async fn get_inbox_for_actor(
     let query = match start_idx {
         Some(start_idx) => sqlx::query(&query_str)
             .bind(actor_id)
-            .bind(count)
+            .bind(i64::try_from(count)?)
             .bind(u32::try_from(start_idx)?),
-        None => sqlx::query(&query_str).bind(actor_id).bind(count),
+        None => sqlx::query(&query_str)
+            .bind(actor_id)
+            .bind(i64::try_from(count)?),
     };
     let mut messages = Vec::new();
     let mut rows = query.fetch(&mut *connection);
