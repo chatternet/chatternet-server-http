@@ -7,15 +7,24 @@ use super::{CollectionPageFields, CollectionPageType, MessageFields};
 pub fn new_inbox(
     actor_id: &str,
     messages: Vec<MessageFields>,
+    page_size: u64,
     start_idx: u64,
     end_idx: Option<u64>,
 ) -> Result<CollectionPageFields<MessageFields>> {
     let collection_id = format!("{}/inbox", actor_id).pipe(URI::try_from)?;
-    let id = format!("{}/inbox&startIdx={}", actor_id, start_idx).pipe(URI::try_from)?;
+    let id = format!(
+        "{}/inbox?startIdx={}&pageSize={}",
+        actor_id, start_idx, page_size
+    )
+    .pipe(URI::try_from)?;
     let next = match end_idx {
-        Some(end_idx) => {
-            Some(format!("{}/inbox&startIdx={}", actor_id, end_idx).pipe(URI::try_from)?)
-        }
+        Some(end_idx) => Some(
+            format!(
+                "{}/inbox?startIdx={}&pageSize={}",
+                actor_id, end_idx, page_size
+            )
+            .pipe(URI::try_from)?,
+        ),
         None => None,
     };
     Ok(CollectionPageFields::new(
@@ -51,19 +60,19 @@ mod test {
         .unwrap();
         let message_id = message.id();
 
-        let inbox = new_inbox("did:example:a", vec![message.clone()], 0, Some(3)).unwrap();
+        let inbox = new_inbox("did:example:a", vec![message.clone()], 4, 0, Some(3)).unwrap();
         assert_eq!(
             CollecitonPage::id(&inbox).as_str(),
-            "did:example:a/inbox&startIdx=0"
+            "did:example:a/inbox?startIdx=0&pageSize=4"
         );
         assert_eq!(inbox.part_of().as_str(), "did:example:a/inbox");
         assert_eq!(
             inbox.next().as_ref().unwrap().as_str(),
-            "did:example:a/inbox&startIdx=3"
+            "did:example:a/inbox?startIdx=3&pageSize=4"
         );
         assert_eq!(inbox.items()[0].id(), message_id);
 
-        let inbox = new_inbox("did:example:a", vec![message.clone()], 0, None).unwrap();
+        let inbox = new_inbox("did:example:a", vec![message.clone()], 4, 0, None).unwrap();
         assert!(inbox.next().is_none());
     }
 }

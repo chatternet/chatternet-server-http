@@ -14,6 +14,7 @@ use crate::db::{self, Connector, InboxOut};
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DidInboxQuery {
+    page_size: Option<u64>,
     start_idx: Option<u64>,
 }
 
@@ -23,12 +24,13 @@ pub async fn handle_inbox(
     Query(query): Query<DidInboxQuery>,
 ) -> Result<Json<CollectionPageFields<MessageFields>>, AppError> {
     let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
+    let page_size = query.page_size.unwrap_or(32);
     let connector = connector.read().await;
     let mut connection = connector
         .connection()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
-    let inbox_out = db::get_inbox_for_actor(&mut connection, &actor_id, 32, query.start_idx)
+    let inbox_out = db::get_inbox_for_actor(&mut connection, &actor_id, page_size, query.start_idx)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     let inbox = match inbox_out {
@@ -44,10 +46,12 @@ pub async fn handle_inbox(
                 .map_err(|_| AppError::DbQueryFailed)?;
             let start_idx = query.start_idx.unwrap_or(high_idx);
             let next_start_idx = if low_idx > 0 { Some(low_idx - 1) } else { None };
-            new_inbox(&actor_id, messages, start_idx, next_start_idx)
+            new_inbox(&actor_id, messages, page_size, start_idx, next_start_idx)
                 .map_err(|_| AppError::ActorIdWrong)?
         }
-        None => new_inbox(&actor_id, vec![], 0, None).map_err(|_| AppError::ActorIdWrong)?,
+        None => {
+            new_inbox(&actor_id, vec![], page_size, 0, None).map_err(|_| AppError::ActorIdWrong)?
+        }
     };
     Ok(Json(inbox))
 }
@@ -138,7 +142,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox", did_1),
+                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_1),
             ))
             .await
             .unwrap();
@@ -155,7 +159,7 @@ mod test {
         );
         assert_eq!(
             inbox.next().as_ref().unwrap().as_str(),
-            &format!("{}/actor/inbox&startIdx={}", did_1, 0)
+            &format!("{}/actor/inbox?startIdx={}&pageSize=4", did_1, 0)
         );
 
         // did_1 follows did_2, gets added to did_2 followers
@@ -174,7 +178,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox", did_1),
+                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_1),
             ))
             .await
             .unwrap();
@@ -188,6 +192,26 @@ mod test {
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:3", "id:1"]
+        );
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/inbox?pageSize=1", did_1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inbox: CollectionPageFields<MessageFields> = get_body(response).await;
+        assert_eq!(
+            inbox
+                .items()
+                .iter()
+                .map(|x| x.object().iter().map(|x| x.as_str()))
+                .flatten()
+                .collect::<Vec<&str>>(),
+            ["id:3"]
         );
     }
 }
