@@ -63,7 +63,7 @@ pub async fn get_message_audiences(
 ) -> Result<Vec<String>> {
     let query = sqlx::query(
         "\
-        SELECT `audience_id` FROM `messagesAudiences` \
+        SELECT `audience_id` FROM `MessagesAudiences` \
         WHERE `message_id` = $1;\
         ",
     )
@@ -77,6 +77,22 @@ pub async fn get_message_audiences(
     Ok(audiences_id)
 }
 
+pub async fn delete_message_audiences(
+    connection: &mut SqliteConnection,
+    message_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "\
+        DELETE FROM `MessagesAudiences` \
+        WHERE `message_id` = $1;\
+        ",
+    )
+    .bind(message_id)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use tokio;
@@ -85,7 +101,7 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn puts_and_gets_message_audiences() {
+    async fn puts_gets_deletes_message_audiences() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
         put_message_audience(&mut connection, "id:1", "did:2/actor/followers")
@@ -109,5 +125,12 @@ mod test {
                 .unwrap(),
             ["tag:1/followers"]
         );
+        delete_message_audiences(&mut connection, "id:1")
+            .await
+            .unwrap();
+        assert!(get_message_audiences(&mut connection, "id:1")
+            .await
+            .unwrap()
+            .is_empty());
     }
 }

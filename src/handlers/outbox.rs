@@ -52,6 +52,41 @@ async fn handle_follow(
     Ok(())
 }
 
+async fn handle_delete(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    let object_id = message.object().first().ok_or(AppError::MessageNotValid)?;
+    if message.object().len() != 1 {
+        Err(AppError::MessageNotValid)?
+    }
+    let object = match db::get_document(&mut *connection, object_id.as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+    {
+        Some(object) => object,
+        None => return Ok(()),
+    };
+    let object: MessageFields =
+        serde_json::from_str(&object).map_err(|_| AppError::MessageNotValid)?;
+    if object.actor() != message.actor() {
+        Err(AppError::MessageNotValid)?
+    }
+    db::delete_message(&mut *connection, object.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_message_audiences(&mut *connection, object.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_message_body(&mut *connection, object.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_document(&mut *connection, object_id.as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    Ok(())
+}
+
 pub async fn handle_actor_outbox(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(did): Path<String>,
@@ -86,6 +121,7 @@ pub async fn handle_actor_outbox(
     match message.type_() {
         // activity expresses a follow relationship
         ActivityType::Follow => handle_follow(&message, &mut *connection).await?,
+        ActivityType::Delete => handle_delete(&message, &mut *connection).await?,
         _ => (),
     }
 
@@ -274,5 +310,118 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let following: CollectionFields<String> = get_body(response).await;
         assert_eq!(following.items(), &vec!["tag:1", "tag:2"]);
+    }
+
+    #[tokio::test]
+    async fn deletes_message() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+        let message = build_message(&jwk, "id:1", None, None, None).await;
+        let message_delete = build_message_with_type(
+            &jwk,
+            ActivityType::Delete,
+            message.id().as_str(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn doesnt_delete_others_messages() {
+        let api = build_test_api().await;
+
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_1 = did_from_jwk(&jwk_1).unwrap();
+        let message = build_message(&jwk_1, "id:1", None, None, None).await;
+
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_2 = did_from_jwk(&jwk_2).unwrap();
+        let message_delete = build_message_with_type(
+            &jwk_2,
+            ActivityType::Delete,
+            message.id().as_str(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_1),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_2),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }

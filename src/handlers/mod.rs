@@ -90,8 +90,9 @@ mod test_utils {
     use super::build_api;
     use crate::db::Connector;
 
-    pub async fn build_message(
+    pub async fn build_message_with_type(
         jwk: &JWK,
+        activity_type: ActivityType,
         document_id: &str,
         to: Option<Vec<String>>,
         cc: Option<Vec<String>>,
@@ -101,17 +102,19 @@ mod test_utils {
         let cc = cc.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
         let audience =
             audience.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
-        MessageFields::new(
-            &jwk,
-            ActivityType::Create,
-            &[document_id],
-            to,
-            cc,
-            audience,
-            None,
-        )
-        .await
-        .unwrap()
+        MessageFields::new(&jwk, activity_type, &[document_id], to, cc, audience, None)
+            .await
+            .unwrap()
+    }
+
+    pub async fn build_message(
+        jwk: &JWK,
+        document_id: &str,
+        to: Option<Vec<String>>,
+        cc: Option<Vec<String>>,
+        audience: Option<Vec<String>>,
+    ) -> MessageFields {
+        build_message_with_type(jwk, ActivityType::Create, document_id, to, cc, audience).await
     }
 
     pub async fn build_follow(follows_id: &[&str], jwk: &JWK) -> MessageFields {

@@ -64,6 +64,19 @@ pub async fn has_message(connection: &mut SqliteConnection, id: &str) -> Result<
     Ok(query.fetch_optional(&mut *connection).await?.is_some())
 }
 
+pub async fn delete_message(connection: &mut SqliteConnection, message_id: &str) -> Result<()> {
+    sqlx::query(
+        "\
+        DELETE FROM `Messages` \
+        WHERE `message_id` = $1;\
+        ",
+    )
+    .bind(message_id)
+    .execute(connection)
+    .await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod test {
     use tokio;
@@ -72,7 +85,7 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn puts_and_has_message() {
+    async fn puts_has_deletes_message() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
         put_message_id(&mut connection, "id:1", "did:1/actor")
@@ -84,5 +97,7 @@ mod test {
         assert!(has_message(&mut connection, "id:1").await.unwrap());
         assert!(has_message(&mut connection, "id:2").await.unwrap());
         assert!(!has_message(&mut connection, "id:3").await.unwrap());
+        delete_message(&mut connection, "id:1").await.unwrap();
+        assert!(!has_message(&mut connection, "id:1").await.unwrap());
     }
 }
