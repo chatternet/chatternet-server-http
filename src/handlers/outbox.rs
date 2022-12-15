@@ -3,7 +3,7 @@ use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::actor_id_from_did;
 use chatternet::model::{ActivityType, Message, MessageFields};
-use sqlx::SqliteConnection;
+use sqlx::{Connection, SqliteConnection};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -103,6 +103,10 @@ pub async fn handle_actor_outbox(
         .connection_mut()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
+    let mut connection = connection
+        .begin()
+        .await
+        .map_err(|_| AppError::DbConnectionFailed)?;
 
     // if already known, take no actions
     let message_id = message.id().to_string();
@@ -147,6 +151,11 @@ pub async fn handle_actor_outbox(
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     db::put_message_id(&mut *connection, &message_id, &actor_id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+
+    connection
+        .commit()
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
 

@@ -5,7 +5,7 @@ use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool};
+use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 mod actor_audience;
 mod actor_following;
@@ -161,6 +161,10 @@ impl Connector {
 
     pub async fn connection_mut(&mut self) -> Result<PoolConnection<Sqlite>> {
         Ok(self.pool_write.acquire().await?)
+    }
+
+    pub async fn transaction(&mut self) -> Result<Transaction<'_, Sqlite>> {
+        Ok(self.pool_write.begin().await?)
     }
 }
 
