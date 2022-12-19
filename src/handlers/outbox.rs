@@ -3,7 +3,7 @@ use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::actor_id_from_did;
 use chatternet::model::{ActivityType, Message, MessageFields};
-use sqlx::SqliteConnection;
+use sqlx::{Connection, SqliteConnection};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -52,6 +52,59 @@ async fn handle_follow(
     Ok(())
 }
 
+async fn handle_delete(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    // can delete only one document at a time
+    let document_id = message.object().first().ok_or(AppError::MessageNotValid)?;
+    if message.object().len() != 1 {
+        Err(AppError::MessageNotValid)?
+    }
+    // the document to delete
+    let document = match db::get_document(&mut *connection, document_id.as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+    {
+        Some(object) => object,
+        None => return Ok(()),
+    };
+    // can delete only messages
+    let message_to_delete: MessageFields =
+        serde_json::from_str(&document).map_err(|_| AppError::MessageNotValid)?;
+    // only the creator of a message can delete that message
+    if message_to_delete.actor() != message.actor() {
+        Err(AppError::MessageNotValid)?
+    }
+    // delete the message document
+    db::delete_document(&mut *connection, message_to_delete.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    // delete the message associations
+    db::delete_message_audiences(&mut *connection, message_to_delete.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_message_body(&mut *connection, message_to_delete.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_message(&mut *connection, message_to_delete.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    // delete the body documents if they are not associated to any other message
+    for body_id in message_to_delete.object() {
+        if db::has_message_with_body(&mut *connection, body_id.as_str())
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?
+        {
+            continue;
+        }
+        db::delete_document(&mut *connection, body_id.as_str())
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    }
+    Ok(())
+}
+
 pub async fn handle_actor_outbox(
     State(connector): State<Arc<RwLock<Connector>>>,
     Path(did): Path<String>,
@@ -66,6 +119,10 @@ pub async fn handle_actor_outbox(
     let mut connector = connector.write().await;
     let mut connection = connector
         .connection_mut()
+        .await
+        .map_err(|_| AppError::DbConnectionFailed)?;
+    let mut connection = connection
+        .begin()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
 
@@ -86,6 +143,7 @@ pub async fn handle_actor_outbox(
     match message.type_() {
         // activity expresses a follow relationship
         ActivityType::Follow => handle_follow(&message, &mut *connection).await?,
+        ActivityType::Delete => handle_delete(&message, &mut *connection).await?,
         _ => (),
     }
 
@@ -114,12 +172,17 @@ pub async fn handle_actor_outbox(
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
 
+    connection
+        .commit()
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+
     Ok(StatusCode::OK)
 }
 
 #[cfg(test)]
 mod test {
-    use chatternet::model::{Collection, CollectionFields};
+    use chatternet::model::{Body, BodyFields, BodyType, Collection, CollectionFields};
     use tokio;
     use tower::ServiceExt;
 
@@ -274,5 +337,238 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let following: CollectionFields<String> = get_body(response).await;
         assert_eq!(following.items(), &vec!["tag:1", "tag:2"]);
+    }
+
+    #[tokio::test]
+    async fn deletes_message() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()))
+            .await
+            .unwrap();
+        let message = build_message(&jwk, body.id().as_str(), None, None, None).await;
+        let message_delete = build_message_with_type(
+            &jwk,
+            ActivityType::Delete,
+            message.id().as_str(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}", body.id().as_str()),
+                &body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &body.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &body.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn deletes_message_and_keeps_shared_body() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()))
+            .await
+            .unwrap();
+        let message_1 = build_message(&jwk, body.id().as_str(), None, None, None).await;
+        let message_2 = build_message(&jwk, body.id().as_str(), None, None, None).await;
+        let message_delete = build_message_with_type(
+            &jwk,
+            ActivityType::Delete,
+            message_1.id().as_str(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_2,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}", body.id().as_str()),
+                &body,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message_1.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &body.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn doesnt_delete_others_messages() {
+        let api = build_test_api().await;
+
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_1 = did_from_jwk(&jwk_1).unwrap();
+        let message = build_message(&jwk_1, "id:1", None, None, None).await;
+
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_2 = did_from_jwk(&jwk_2).unwrap();
+        let message_delete = build_message_with_type(
+            &jwk_2,
+            ActivityType::Delete,
+            message.id().as_str(),
+            None,
+            None,
+            None,
+        )
+        .await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_1),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_2),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}", &message.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 }
