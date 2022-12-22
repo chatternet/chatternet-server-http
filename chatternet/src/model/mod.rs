@@ -14,13 +14,19 @@
 //! of the ActivityStreams `Collection` class.
 
 mod actor;
+mod astreamctx;
 mod body;
 mod collection;
 mod inbox;
 mod message;
+mod stringmax;
+mod uri;
+mod vecmax;
 
 pub use actor::*;
+pub use astreamctx::*;
 pub use body::*;
 pub use collection::*;
 pub use inbox::*;
 pub use message::*;
+pub use uri::*;

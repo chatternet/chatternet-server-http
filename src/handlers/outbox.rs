@@ -14,15 +14,15 @@ pub fn build_audiences_id(message: &MessageFields) -> Result<Vec<String>> {
     let tos_id: Option<Vec<String>> = message
         .to()
         .as_ref()
-        .map(|x| x.iter().map(|x| x.to_string()).collect());
+        .map(|x| x.as_vec().iter().map(|x| x.to_string()).collect());
     let ccs_id: Option<Vec<String>> = message
         .cc()
         .as_ref()
-        .map(|x| x.iter().map(|x| x.to_string()).collect());
+        .map(|x| x.as_vec().iter().map(|x| x.to_string()).collect());
     let audiences_id: Option<Vec<String>> = message
         .audience()
         .as_ref()
-        .map(|x| x.iter().map(|x| x.to_string()).collect());
+        .map(|x| x.as_vec().iter().map(|x| x.to_string()).collect());
     let chained = std::iter::empty::<String>()
         .chain(tos_id.unwrap_or(Vec::new()).into_iter())
         .chain(ccs_id.unwrap_or(Vec::new()).into_iter())
@@ -35,7 +35,12 @@ async fn handle_follow(
     connection: &mut SqliteConnection,
 ) -> Result<(), AppError> {
     let actor_id = message.actor().as_str();
-    let objects_id: Vec<&str> = message.object().iter().map(|x| x.as_str()).collect();
+    let objects_id: Vec<&str> = message
+        .object()
+        .as_vec()
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
     for object_id in objects_id {
         db::put_actor_following(&mut *connection, &actor_id, &object_id)
             .await
@@ -57,8 +62,12 @@ async fn handle_delete(
     connection: &mut SqliteConnection,
 ) -> Result<(), AppError> {
     // can delete only one document at a time
-    let document_id = message.object().first().ok_or(AppError::MessageNotValid)?;
-    if message.object().len() != 1 {
+    let document_id = message
+        .object()
+        .as_vec()
+        .first()
+        .ok_or(AppError::MessageNotValid)?;
+    if message.object().as_vec().len() != 1 {
         Err(AppError::MessageNotValid)?
     }
     // the document to delete
@@ -91,7 +100,7 @@ async fn handle_delete(
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     // delete the body documents if they are not associated to any other message
-    for body_id in message_to_delete.object() {
+    for body_id in message_to_delete.object().as_vec() {
         if db::has_message_with_body(&mut *connection, body_id.as_str())
             .await
             .map_err(|_| AppError::DbQueryFailed)?
@@ -156,7 +165,12 @@ pub async fn handle_actor_outbox(
     }
 
     // associate this message with its objects so they can be stored later
-    let objects_id: Vec<&str> = message.object().iter().map(|x| x.as_str()).collect();
+    let objects_id: Vec<&str> = message
+        .object()
+        .as_vec()
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
     for object_id in objects_id {
         db::put_message_body(&mut *connection, &message_id, object_id)
             .await

@@ -2,6 +2,7 @@ use anyhow::Error;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(try_from = "String")]
 pub struct URI(String);
 
 impl From<URI> for String {
@@ -90,5 +91,18 @@ mod test {
     #[test]
     fn formats_string_from() {
         assert_eq!(URI::try_from("a:b".to_string()).unwrap().to_string(), "a:b");
+    }
+
+    #[test]
+    fn serializes_and_deserializes() {
+        let value: URI =
+            serde_json::from_value(serde_json::to_value(&URI::from_str("a:b").unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(value, URI::from_str("a:b").unwrap());
+    }
+
+    #[test]
+    fn doesnt_deserialize_ivnalid() {
+        serde_json::from_str::<URI>("ab").unwrap_err();
     }
 }

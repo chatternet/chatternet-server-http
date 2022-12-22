@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use ssi::vc::URI;
 
-use crate::CONTEXT_ACTIVITY_STREAMS;
+use super::AstreamContext;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CollectionType {
     Collection,
     OrderedCollection,
@@ -13,7 +13,7 @@ pub enum CollectionType {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionFields<T> {
     #[serde(rename = "@context")]
-    context: Vec<String>,
+    context: AstreamContext,
     id: URI,
     #[serde(rename = "type")]
     type_: CollectionType,
@@ -23,7 +23,7 @@ pub struct CollectionFields<T> {
 impl<T> CollectionFields<T> {
     pub fn new(id: URI, type_: CollectionType, items: Vec<T>) -> Self {
         CollectionFields {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             id,
             type_,
             items,
@@ -49,7 +49,7 @@ impl<T> Collection<T> for CollectionFields<T> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CollectionPageType {
     CollectionPage,
     OrderedCollectionPage,
@@ -59,7 +59,7 @@ pub enum CollectionPageType {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionPageFields<T> {
     #[serde(rename = "@context")]
-    context: Vec<String>,
+    context: AstreamContext,
     id: URI,
     #[serde(rename = "type")]
     type_: CollectionPageType,
@@ -77,7 +77,7 @@ impl<T> CollectionPageFields<T> {
         next: Option<URI>,
     ) -> Self {
         CollectionPageFields {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             type_,
             id,
             items,

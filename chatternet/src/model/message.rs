@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use chrono::prelude::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,17 +9,20 @@ use ssi::jwk::JWK;
 use ssi::ldp::{now_ms, LinkedDataDocument};
 use ssi::ldp::{Error as LdpError, Proof};
 use ssi::rdf::DataSet;
-use ssi::vc::URI;
 use std::str::FromStr;
 
 use crate::cid::{cid_from_json, uri_from_cid, CidVerifier};
 use crate::didkey::{actor_id_from_did, did_from_actor_id, did_from_jwk};
+use crate::model::URI;
 use crate::new_context_loader;
 use crate::proof::{build_proof, ProofVerifier};
 
-use crate::CONTEXT_ACTIVITY_STREAMS;
+use super::vecmax::VecMax;
+use super::AstreamContext;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+const MAX_URIS: usize = 256;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum ActivityType {
     Accept,
     Add,
@@ -55,15 +58,15 @@ pub enum ActivityType {
 #[serde(rename_all = "camelCase")]
 pub struct MessageNoIdProof {
     #[serde(rename = "@context")]
-    context: Vec<String>,
+    context: AstreamContext,
     #[serde(rename = "type")]
     type_: ActivityType,
     actor: URI,
-    object: Vec<URI>,
+    object: VecMax<URI, MAX_URIS>,
     published: DateTime<Utc>,
-    to: Option<Vec<URI>>,
-    cc: Option<Vec<URI>>,
-    audience: Option<Vec<URI>>,
+    to: Option<VecMax<URI, MAX_URIS>>,
+    cc: Option<VecMax<URI, MAX_URIS>>,
+    audience: Option<VecMax<URI, MAX_URIS>>,
     origin: Option<URI>,
 }
 
@@ -95,19 +98,19 @@ impl MessageFields {
         let actor_id = URI::try_from(actor_id_from_did(&did)?)?;
         let objects_id: Result<Vec<URI>> = objects_id
             .iter()
-            .map(|x| URI::from_str(x.as_ref()).map_err(Error::new))
+            .map(|x| URI::from_str(x.as_ref()))
             .collect();
         let objects_id = objects_id?;
         let published = now_ms();
         let message = MessageNoIdProof {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             type_,
             actor: actor_id,
-            object: objects_id,
+            object: VecMax::<_, MAX_URIS>::try_from(objects_id)?,
             published,
-            to,
-            cc,
-            audience,
+            to: to.map(VecMax::<_, MAX_URIS>::try_from).transpose()?,
+            cc: cc.map(VecMax::<_, MAX_URIS>::try_from).transpose()?,
+            audience: audience.map(VecMax::<_, MAX_URIS>::try_from).transpose()?,
             origin,
         };
         let proof = build_proof(&message, &jwk).await?;
@@ -173,14 +176,14 @@ impl CidVerifier<MessageNoId> for MessageFields {
 pub trait Message: CidVerifier<MessageNoId> + ProofVerifier<MessageNoIdProof> {
     fn id(&self) -> &URI;
     fn proof(&self) -> &Proof;
-    fn context(&self) -> &Vec<String>;
+    fn context(&self) -> &AstreamContext;
     fn type_(&self) -> ActivityType;
     fn actor(&self) -> &URI;
-    fn object(&self) -> &Vec<URI>;
+    fn object(&self) -> &VecMax<URI, MAX_URIS>;
     fn published(&self) -> &DateTime<Utc>;
-    fn to(&self) -> &Option<Vec<URI>>;
-    fn cc(&self) -> &Option<Vec<URI>>;
-    fn audience(&self) -> &Option<Vec<URI>>;
+    fn to(&self) -> &Option<VecMax<URI, MAX_URIS>>;
+    fn cc(&self) -> &Option<VecMax<URI, MAX_URIS>>;
+    fn audience(&self) -> &Option<VecMax<URI, MAX_URIS>>;
 
     async fn verify(&self) -> Result<()> {
         self.verify_cid().await?;
@@ -196,7 +199,7 @@ impl Message for MessageFields {
     fn proof(&self) -> &Proof {
         &self.no_id.proof
     }
-    fn context(&self) -> &Vec<String> {
+    fn context(&self) -> &AstreamContext {
         &self.no_id.no_proof.context
     }
     fn type_(&self) -> ActivityType {
@@ -205,19 +208,19 @@ impl Message for MessageFields {
     fn actor(&self) -> &URI {
         &self.no_id.no_proof.actor
     }
-    fn object(&self) -> &Vec<URI> {
+    fn object(&self) -> &VecMax<URI, MAX_URIS> {
         &self.no_id.no_proof.object
     }
     fn published(&self) -> &DateTime<Utc> {
         &self.no_id.no_proof.published
     }
-    fn to(&self) -> &Option<Vec<URI>> {
+    fn to(&self) -> &Option<VecMax<URI, MAX_URIS>> {
         &self.no_id.no_proof.to
     }
-    fn cc(&self) -> &Option<Vec<URI>> {
+    fn cc(&self) -> &Option<VecMax<URI, MAX_URIS>> {
         &self.no_id.no_proof.cc
     }
-    fn audience(&self) -> &Option<Vec<URI>> {
+    fn audience(&self) -> &Option<VecMax<URI, MAX_URIS>> {
         &self.no_id.no_proof.audience
     }
 }

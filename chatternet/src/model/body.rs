@@ -1,13 +1,14 @@
-use anyhow::Result;
+use anyhow::{Error, Result};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use ssi::vc::URI;
 
 use crate::cid::{cid_from_json, uri_from_cid, CidVerifier};
+use crate::model::URI;
 use crate::new_context_loader;
-use crate::CONTEXT_ACTIVITY_STREAMS;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+use super::AstreamContext;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum BodyType {
     Article,
     Audio,
@@ -27,7 +28,7 @@ pub enum BodyType {
 #[serde(rename_all = "camelCase")]
 pub struct BodyNoId {
     #[serde(rename = "@context")]
-    context: Vec<String>,
+    context: AstreamContext,
     #[serde(rename = "type")]
     type_: BodyType,
     content: Option<String>,
@@ -43,7 +44,7 @@ pub struct BodyFields {
 impl BodyFields {
     pub async fn new(type_: BodyType, content: Option<String>) -> Result<Self> {
         let object = BodyNoId {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             type_,
             content,
         };
@@ -61,20 +62,25 @@ impl CidVerifier<BodyNoId> for BodyFields {
 
 #[async_trait]
 pub trait Body: CidVerifier<BodyNoId> {
-    fn contexts(&self) -> &Vec<String>;
+    fn context(&self) -> &AstreamContext;
     fn id(&self) -> &URI;
     fn type_(&self) -> BodyType;
     fn content(&self) -> &Option<String>;
 
     async fn verify(&self) -> Result<()> {
+        if self.type_() == BodyType::Note
+            && self.content().as_ref().map_or(false, |x| x.len() > 512)
+        {
+            Err(Error::msg("note content is too long"))?
+        }
         self.verify_cid().await?;
         Ok(())
     }
 }
 
 impl Body for BodyFields {
-    fn contexts(&self) -> &Vec<String> {
-        &&self.no_id.context
+    fn context(&self) -> &AstreamContext {
+        &self.no_id.context
     }
     fn id(&self) -> &URI {
         &self.id
@@ -99,6 +105,17 @@ mod test {
             .await
             .unwrap();
         body.verify().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doesnt_verify_note_too_long() {
+        let body = BodyFields::new(
+            BodyType::Note,
+            Some(std::iter::repeat("a").take(512 + 1).collect::<String>()),
+        )
+        .await
+        .unwrap();
+        body.verify().await.unwrap_err();
     }
 
     #[tokio::test]

@@ -77,14 +77,13 @@ mod test_utils {
     use axum::body::Body;
     use axum::http::{self, Request, Response};
     use axum::routing::Router;
-    use chatternet::model::{ActivityType, MessageFields};
+    use chatternet::model::{ActivityType, MessageFields, URI};
     use hyper;
     use hyper::body::HttpBody;
     use mime;
     use serde::de::DeserializeOwned;
     use serde::Serialize;
     use ssi::jwk::JWK;
-    use ssi::vc::URI;
     use tokio::sync::RwLock;
 
     use super::build_api;
