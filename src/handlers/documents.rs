@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 
 use super::error::AppError;
 use crate::db::{self, Connector};
-use chatternet::model::{Body, BodyFields};
+use chatternet::model::{Body, BodyFields, BodyType};
 
 /// Handle a get request for a document with ID `id`.
 ///
@@ -63,9 +63,12 @@ pub async fn handle_body_post(
         .connection_mut()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
-
     if body.id().as_str() != id {
         Err(AppError::DocumentIdWrong)?;
+    }
+    // NOTE: for now accept only Notes (they have max size)
+    if body.type_() != BodyType::Note {
+        Err(AppError::DocumentNotValid)?;
     }
     // only accept body if a known (signed) message is associated with it
     if !db::has_message_with_body(&mut *connection, &id)
