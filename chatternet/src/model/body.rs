@@ -34,6 +34,7 @@ pub struct BodyNoId {
     #[serde(rename = "type")]
     type_: BodyType,
     content: Option<String>,
+    media_type: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -44,7 +45,11 @@ pub struct BodyFields {
 }
 
 impl BodyFields {
-    pub async fn new(type_: BodyType, content: Option<String>) -> Result<Self> {
+    pub async fn new(
+        type_: BodyType,
+        content: Option<String>,
+        media_type: Option<String>,
+    ) -> Result<Self> {
         if type_ == BodyType::Note && content.as_ref().map_or(false, |x| x.len() > MAX_BODY_BYTES) {
             Err(Error::msg("note content is too long"))?
         }
@@ -52,6 +57,7 @@ impl BodyFields {
             context: AstreamContext::new(),
             type_,
             content,
+            media_type,
         };
         let id =
             uri_from_cid(cid_from_json(&object, &mut new_context_loader(), None).await?).unwrap();
@@ -109,9 +115,13 @@ mod test {
 
     #[tokio::test]
     async fn builds_and_verifies_body() {
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()))
-            .await
-            .unwrap();
+        let body = BodyFields::new(
+            BodyType::Note,
+            Some("abc".to_string()),
+            Some("text/html".to_string()),
+        )
+        .await
+        .unwrap();
         body.verify().await.unwrap();
     }
 
@@ -124,6 +134,7 @@ mod test {
                     .take(MAX_BODY_BYTES + 1)
                     .collect::<String>(),
             ),
+            None,
         )
         .await
         .unwrap_err();
@@ -131,7 +142,7 @@ mod test {
 
     #[tokio::test]
     async fn doesnt_verify_note_too_long() {
-        let body = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let body = BodyFields::new(BodyType::Note, None, None).await.unwrap();
         let mut body = serde_json::to_value(&body).unwrap();
         body.as_object_mut().unwrap().insert(
             "content".to_string(),
@@ -148,7 +159,7 @@ mod test {
 
     #[tokio::test]
     async fn doesnt_verify_modified_data() {
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()))
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None)
             .await
             .unwrap();
         body.verify().await.unwrap();

@@ -148,7 +148,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let body = BodyFields::new(BodyType::Note, None, None).await.unwrap();
         let body_id = body.id().as_str();
         let message = build_message(&jwk, body_id, None, None, None).await;
 
@@ -191,7 +191,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let body = BodyFields::new(BodyType::Note, None, None).await.unwrap();
         let body_id = body.id().as_str();
         let message = build_message(&jwk, body_id, None, None, None).await;
 
@@ -250,7 +250,7 @@ mod test {
     #[tokio::test]
     async fn wont_post_unknown() {
         let api = build_test_api().await;
-        let document = BodyFields::new(BodyType::Note, None).await.unwrap();
+        let document = BodyFields::new(BodyType::Note, None, None).await.unwrap();
         let document_id = document.id().as_str();
         let response = api
             .clone()
