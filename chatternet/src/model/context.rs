@@ -1,23 +1,23 @@
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 
-use crate::CONTEXT_ACTIVITY_STREAMS;
+use crate::{CONTEXT_ACTIVITY_STREAMS, CONTEXT_SIGNATURE};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[serde(try_from = "[String; 1]")]
-pub struct AstreamContext([&'static str; 1]);
+#[serde(try_from = "[String; 2]")]
+pub struct AstreamContext([&'static str; 2]);
 
 impl AstreamContext {
     pub fn new() -> AstreamContext {
-        AstreamContext([CONTEXT_ACTIVITY_STREAMS])
+        AstreamContext([CONTEXT_ACTIVITY_STREAMS, CONTEXT_SIGNATURE])
     }
 }
 
-impl std::convert::TryFrom<[String; 1]> for AstreamContext {
+impl std::convert::TryFrom<[String; 2]> for AstreamContext {
     type Error = Error;
-    fn try_from(value: [String; 1]) -> Result<Self, Self::Error> {
-        if value[0] != CONTEXT_ACTIVITY_STREAMS {
-            Err(Error::msg("actiity stream context is invalid"))?
+    fn try_from(value: [String; 2]) -> Result<Self, Self::Error> {
+        if value[0] != CONTEXT_ACTIVITY_STREAMS || value[1] != CONTEXT_SIGNATURE {
+            Err(Error::msg("context is invalid"))?
         }
         Ok(AstreamContext::new())
     }
@@ -30,8 +30,9 @@ mod test {
     #[test]
     fn builds_new() {
         let ctx = AstreamContext::new();
-        assert_eq!(ctx.0.len(), 1);
+        assert_eq!(ctx.0.len(), 2);
         assert_eq!(ctx.0[0], CONTEXT_ACTIVITY_STREAMS);
+        assert_eq!(ctx.0[1], CONTEXT_SIGNATURE);
     }
 
     #[test]

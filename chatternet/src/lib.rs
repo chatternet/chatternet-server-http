@@ -9,6 +9,7 @@ pub mod model;
 pub mod proof;
 
 const CONTEXT_ACTIVITY_STREAMS: &str = ldcontexts::ACTIVITY_STREAMS_URI;
+const CONTEXT_SIGNATURE: &str = ldcontexts::ED25519_2020_URI;
 
 /// Build a [`ContextLoader`] which can lookup the contexts in the
 /// [`ldcontexts`] module, and which will not attempt to dereference documents
