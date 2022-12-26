@@ -8,15 +8,19 @@ use ssi::jwk::JWK;
 use ssi::ldp::LinkedDataDocument;
 use ssi::ldp::{Error as LdpError, Proof};
 use ssi::rdf::DataSet;
-use ssi::vc::URI;
 use std::str::FromStr;
 
 use crate::didkey::{actor_id_from_did, did_from_actor_id, did_from_jwk};
+use crate::model::URI;
 use crate::proof::{build_proof, get_proof_did, ProofVerifier};
-use crate::CONTEXT_ACTIVITY_STREAMS;
+
+use super::stringmax::StringMaxChars;
+use super::AstreamContext;
+
+type ActorName = StringMaxChars<30>;
 
 /// ActivityStream actor types.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum ActorType {
     Application,
     Group,
@@ -33,7 +37,7 @@ pub enum ActorType {
 #[serde(rename_all = "camelCase")]
 pub struct ActorNoProof {
     #[serde(rename = "@context")]
-    context: Vec<String>,
+    context: AstreamContext,
     id: URI,
     #[serde(rename = "type")]
     type_: ActorType,
@@ -42,7 +46,9 @@ pub struct ActorNoProof {
     following: URI,
     followers: URI,
     #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+    name: Option<ActorName>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<URI>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -53,7 +59,12 @@ pub struct ActorFields {
 }
 
 impl ActorFields {
-    pub async fn new(jwk: &JWK, type_: ActorType, name: Option<String>) -> Result<Self> {
+    pub async fn new(
+        jwk: &JWK,
+        type_: ActorType,
+        name: Option<String>,
+        url: Option<String>,
+    ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
         let actor_id = actor_id_from_did(&did)?;
         let id = URI::from_str(&actor_id)?;
@@ -62,14 +73,15 @@ impl ActorFields {
         let following = URI::try_from(format!("{}/following", &actor_id))?;
         let followers = URI::try_from(format!("{}/followers", &actor_id))?;
         let actor = ActorNoProof {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             id,
             type_,
             inbox,
             outbox,
             following,
             followers,
-            name,
+            name: name.map(ActorName::try_from).transpose()?,
+            url: url.map(URI::try_from).transpose()?,
         };
         let proof = build_proof(&actor, &jwk).await?;
         Ok(ActorFields {
@@ -119,14 +131,14 @@ impl ProofVerifier<ActorNoProof> for ActorFields {
 #[async_trait]
 pub trait Actor: ProofVerifier<ActorNoProof> {
     fn proof(&self) -> &Proof;
-    fn context(&self) -> &Vec<String>;
+    fn context(&self) -> &AstreamContext;
     fn id(&self) -> &URI;
     fn type_(&self) -> ActorType;
     fn inbox(&self) -> &URI;
     fn outbox(&self) -> &URI;
     fn following(&self) -> &URI;
     fn followers(&self) -> &URI;
-    fn name(&self) -> &Option<String>;
+    fn name(&self) -> &Option<ActorName>;
 
     async fn verify(&self) -> Result<()> {
         let actor_id = self.id().as_str();
@@ -154,7 +166,7 @@ pub trait Actor: ProofVerifier<ActorNoProof> {
 }
 
 impl Actor for ActorFields {
-    fn context(&self) -> &Vec<String> {
+    fn context(&self) -> &AstreamContext {
         &self.no_proof.context
     }
     fn id(&self) -> &URI {
@@ -175,7 +187,7 @@ impl Actor for ActorFields {
     fn followers(&self) -> &URI {
         &self.no_proof.followers
     }
-    fn name(&self) -> &Option<String> {
+    fn name(&self) -> &Option<ActorName> {
         &self.no_proof.name
     }
     fn proof(&self) -> &Proof {
@@ -193,16 +205,47 @@ mod test {
     #[tokio::test]
     async fn builds_and_verifies_actor() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let actor = ActorFields::new(&jwk, ActorType::Person, None)
+        let actor = ActorFields::new(&jwk, ActorType::Person, None, None)
             .await
             .unwrap();
         actor.verify().await.unwrap();
+        let actor = ActorFields::new(
+            &jwk,
+            ActorType::Person,
+            Some(std::iter::repeat("a").take(30).collect::<String>()),
+            None,
+        )
+        .await
+        .unwrap();
+        actor.verify().await.unwrap();
+        let actor = ActorFields::new(
+            &jwk,
+            ActorType::Person,
+            None,
+            Some("https://abc.example".to_string()),
+        )
+        .await
+        .unwrap();
+        actor.verify().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn doesnt_verify_name_too_long() {
+        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
+        ActorFields::new(
+            &jwk,
+            ActorType::Person,
+            Some(std::iter::repeat("a").take(31).collect::<String>()),
+            None,
+        )
+        .await
+        .unwrap_err();
     }
 
     #[tokio::test]
     async fn doesnt_verify_invalid_uris() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let actor = ActorFields::new(&jwk, ActorType::Person, None)
+        let actor = ActorFields::new(&jwk, ActorType::Person, None, None)
             .await
             .unwrap();
         let mut invalid = actor.clone();
@@ -226,11 +269,11 @@ mod test {
     async fn doesnt_verify_modified_data() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let name = "abc".to_string();
-        let actor = ActorFields::new(&jwk, ActorType::Person, Some(name))
+        let actor = ActorFields::new(&jwk, ActorType::Person, Some(name), None)
             .await
             .unwrap();
         actor.verify().await.unwrap();
-        let name = "abcd".to_string();
+        let name = ActorName::from_str("abcd").unwrap();
         let actor = ActorFields {
             proof: actor.proof,
             no_proof: ActorNoProof {

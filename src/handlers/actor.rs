@@ -99,7 +99,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let actor = ActorFields::new(&jwk, ActorType::Person, Some("abc".to_string()))
+        let actor = ActorFields::new(&jwk, ActorType::Person, Some("abc".to_string()), None)
             .await
             .unwrap();
 
@@ -132,7 +132,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let actor = ActorFields::new(&jwk, ActorType::Person, Some("abc".to_string()))
+        let actor = ActorFields::new(&jwk, ActorType::Person, Some("abc".to_string()), None)
             .await
             .unwrap();
 

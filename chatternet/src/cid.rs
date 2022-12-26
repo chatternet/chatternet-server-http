@@ -9,8 +9,8 @@ use serde::Serialize;
 use serde_json;
 use ssi::jsonld::{json_to_dataset, ContextLoader};
 use ssi::urdna2015;
-use ssi::vc::URI;
 
+use crate::model::URI;
 use crate::new_context_loader;
 
 /// Build a CID from a JSON-LD document.
@@ -70,12 +70,12 @@ mod test {
     use tokio;
 
     use super::*;
-    use crate::{new_context_loader, CONTEXT_ACTIVITY_STREAMS};
+    use crate::{model::AstreamContext, new_context_loader};
 
     #[tokio::test]
     async fn builds_cid_from_object() {
         let activity_1 = json!({
-            "@context": [CONTEXT_ACTIVITY_STREAMS],
+            "@context": AstreamContext::new(),
             "content": "abc",
         });
         let activity_2 = json!({
@@ -84,7 +84,7 @@ mod test {
         let cid_1 = cid_from_json(&activity_1, &mut new_context_loader(), None)
             .await
             .unwrap();
-        let more_contexts = serde_json::to_string(&[CONTEXT_ACTIVITY_STREAMS]).unwrap();
+        let more_contexts = serde_json::to_string(&AstreamContext::new()).unwrap();
         let cid_2 = cid_from_json(&activity_2, &mut new_context_loader(), Some(&more_contexts))
             .await
             .unwrap();
@@ -95,7 +95,7 @@ mod test {
     #[serde(rename_all = "camelCase")]
     pub struct Data {
         #[serde(rename = "@context")]
-        pub context: Vec<String>,
+        pub context: AstreamContext,
         pub content: String,
     }
 
@@ -115,7 +115,7 @@ mod test {
     async fn builds_and_verifies_cid() {
         let content = "abc".to_string();
         let data = Data {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             content,
         };
         let id = cid_from_json(&data, &mut new_context_loader(), None)
@@ -131,7 +131,7 @@ mod test {
     async fn doesnt_verify_modified_content() {
         let content = "abc".to_string();
         let data = Data {
-            context: vec![CONTEXT_ACTIVITY_STREAMS.to_string()],
+            context: AstreamContext::new(),
             content,
         };
         let id = cid_from_json(&data, &mut new_context_loader(), None)

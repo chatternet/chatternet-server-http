@@ -152,7 +152,7 @@ mod test {
             inbox
                 .items()
                 .iter()
-                .map(|x| x.object().iter().map(|x| x.as_str()))
+                .map(|x| x.object().as_vec().iter().map(|x| x.as_str()))
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:1"]
@@ -188,7 +188,7 @@ mod test {
             inbox
                 .items()
                 .iter()
-                .map(|x| x.object().iter().map(|x| x.as_str()))
+                .map(|x| x.object().as_vec().iter().map(|x| x.as_str()))
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:3", "id:1"]
@@ -208,7 +208,7 @@ mod test {
             inbox
                 .items()
                 .iter()
-                .map(|x| x.object().iter().map(|x| x.as_str()))
+                .map(|x| x.object().as_vec().iter().map(|x| x.as_str()))
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:3"]

@@ -16,11 +16,17 @@
 mod actor;
 mod body;
 mod collection;
+mod context;
 mod inbox;
 mod message;
+mod stringmax;
+mod uri;
+mod vecmax;
 
 pub use actor::*;
 pub use body::*;
 pub use collection::*;
+pub use context::*;
 pub use inbox::*;
 pub use message::*;
+pub use uri::*;
