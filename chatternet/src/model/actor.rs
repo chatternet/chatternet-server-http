@@ -47,6 +47,8 @@ pub struct ActorNoProof {
     followers: URI,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<ActorName>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<URI>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,7 +59,12 @@ pub struct ActorFields {
 }
 
 impl ActorFields {
-    pub async fn new(jwk: &JWK, type_: ActorType, name: Option<String>) -> Result<Self> {
+    pub async fn new(
+        jwk: &JWK,
+        type_: ActorType,
+        name: Option<String>,
+        url: Option<String>,
+    ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
         let actor_id = actor_id_from_did(&did)?;
         let id = URI::from_str(&actor_id)?;
@@ -74,6 +81,7 @@ impl ActorFields {
             following,
             followers,
             name: name.map(ActorName::try_from).transpose()?,
+            url: url.map(URI::try_from).transpose()?,
         };
         let proof = build_proof(&actor, &jwk).await?;
         Ok(ActorFields {
@@ -197,7 +205,7 @@ mod test {
     #[tokio::test]
     async fn builds_and_verifies_actor() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let actor = ActorFields::new(&jwk, ActorType::Person, None)
+        let actor = ActorFields::new(&jwk, ActorType::Person, None, None)
             .await
             .unwrap();
         actor.verify().await.unwrap();
@@ -205,6 +213,16 @@ mod test {
             &jwk,
             ActorType::Person,
             Some(std::iter::repeat("a").take(30).collect::<String>()),
+            None,
+        )
+        .await
+        .unwrap();
+        actor.verify().await.unwrap();
+        let actor = ActorFields::new(
+            &jwk,
+            ActorType::Person,
+            None,
+            Some("https://abc.example".to_string()),
         )
         .await
         .unwrap();
@@ -218,6 +236,7 @@ mod test {
             &jwk,
             ActorType::Person,
             Some(std::iter::repeat("a").take(31).collect::<String>()),
+            None,
         )
         .await
         .unwrap_err();
@@ -226,7 +245,7 @@ mod test {
     #[tokio::test]
     async fn doesnt_verify_invalid_uris() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let actor = ActorFields::new(&jwk, ActorType::Person, None)
+        let actor = ActorFields::new(&jwk, ActorType::Person, None, None)
             .await
             .unwrap();
         let mut invalid = actor.clone();
@@ -250,7 +269,7 @@ mod test {
     async fn doesnt_verify_modified_data() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
         let name = "abc".to_string();
-        let actor = ActorFields::new(&jwk, ActorType::Person, Some(name))
+        let actor = ActorFields::new(&jwk, ActorType::Person, Some(name), None)
             .await
             .unwrap();
         actor.verify().await.unwrap();
