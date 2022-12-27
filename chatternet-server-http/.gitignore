@@ -1,3 +1,3 @@
 /target
 *.sqlite
-server-info.json
+actor.json

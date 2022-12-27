@@ -526,6 +526,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "chatternet-server-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.13.1",
+ "chatternet",
+ "clap",
+ "did-method-key",
+ "ed25519-dalek",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "ssi",
+ "tap",
+ "tokio",
+]
+
+[[package]]
 name = "chatternet-server-http"
 version = "0.1.0"
 dependencies = [

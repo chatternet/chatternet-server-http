@@ -2,5 +2,6 @@
 members = [
     "chatternet",
     "chatternet-server-http",
+    "chatternet-server-cli",
 ]
 
