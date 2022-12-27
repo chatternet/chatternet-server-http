@@ -532,6 +532,7 @@ dependencies = [
  "anyhow",
  "base64 0.13.1",
  "chatternet",
+ "chatternet-server-http",
  "clap",
  "did-method-key",
  "ed25519-dalek",
