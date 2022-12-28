@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
-use ssi::vc::URI;
 
-use super::AstreamContext;
+use super::{AstreamContext, URI};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CollectionType {

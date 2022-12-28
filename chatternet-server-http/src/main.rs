@@ -12,13 +12,14 @@ use tokio;
 use tokio::sync::RwLock;
 
 use chatternet_server_http::db::{self, Connector};
-use chatternet_server_http::handlers::build_api;
+use chatternet_server_http::handlers::{build_api, AppState};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     port: u16,
     path_actor: PathBuf,
+    path_key: PathBuf,
     path_db: PathBuf,
     #[arg(short = 'l')]
     loopback: bool,
@@ -87,9 +88,12 @@ async fn main() -> Result<()> {
         .await?,
     ));
     store_actor(&actor, connector.clone()).await?;
+    let jwk = Arc::new(serde_json::from_str(&fs::read_to_string(&args.path_key)?)?);
+    let state = AppState { connector, jwk };
+
     let parsed_url = parse_actor_url(&actor)?;
 
-    let app = build_api(connector, &parsed_url.prefix, &parsed_url.did);
+    let app = build_api(state, &parsed_url.prefix, &parsed_url.did);
     let address = if args.loopback {
         "127.0.0.1"
     } else {

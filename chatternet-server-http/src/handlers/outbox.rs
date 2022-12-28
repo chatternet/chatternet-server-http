@@ -1,14 +1,14 @@
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
-use chatternet::didkey::actor_id_from_did;
-use chatternet::model::{ActivityType, Message, MessageFields};
+use chatternet::didkey::{actor_id_from_did, did_from_jwk};
+use chatternet::model::{ActivityType, Message, MessageFields, URI};
 use sqlx::{Connection, SqliteConnection};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use ssi::jwk::JWK;
 
 use super::error::AppError;
-use crate::db::{self, Connector};
+use super::AppState;
+use crate::db::{self};
 
 pub fn build_audiences_id(message: &MessageFields) -> Result<Vec<String>> {
     let tos_id: Option<Vec<String>> = message
@@ -114,8 +114,83 @@ async fn handle_delete(
     Ok(())
 }
 
+async fn store_message(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    let message_id = message.id().as_str();
+    let actor_id = message.actor().as_str();
+
+    // store this message id for its audiences
+    let audiences_id = build_audiences_id(&message).map_err(|_| AppError::MessageNotValid)?;
+    for audience_id in &audiences_id {
+        db::put_message_audience(&mut *connection, &message_id, &audience_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    }
+
+    // associate this message with its objects so they can be stored later
+    let objects_id: Vec<&str> = message
+        .object()
+        .as_vec()
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
+    for object_id in objects_id {
+        db::put_message_body(&mut *connection, &message_id, object_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    }
+
+    // store the message itself
+    let message = serde_json::to_string(&message).map_err(|_| AppError::MessageNotValid)?;
+    db::put_document_if_new(&mut *connection, &message_id, &message)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::put_message_id(&mut *connection, &message_id, &actor_id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+
+    Ok(())
+}
+
+async fn handle_view(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+    jwk: &JWK,
+) -> Result<(), AppError> {
+    let server_did = did_from_jwk(&jwk).map_err(|_| AppError::ServerMisconfigured)?;
+    let server_actor_id =
+        actor_id_from_did(&server_did).map_err(|_| AppError::ServerMisconfigured)?;
+    if !db::inbox_contains_message(&mut *connection, &server_actor_id, message.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+    {
+        return Ok(());
+    }
+
+    let server_followers = format!("{}/followers", server_actor_id);
+    let view_message = MessageFields::new(
+        &jwk,
+        ActivityType::View,
+        message.object().as_vec().clone(),
+        None,
+        None,
+        Some(vec![
+            URI::try_from(server_followers).map_err(|_| AppError::ServerMisconfigured)?
+        ]),
+        Some(message.id().to_owned()),
+    )
+    .await
+    .map_err(|_| AppError::ServerMisconfigured)?;
+
+    store_message(&view_message, &mut *connection).await?;
+
+    Ok(())
+}
+
 pub async fn handle_actor_outbox(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, jwk }): State<AppState>,
     Path(did): Path<String>,
     Json(message): Json<MessageFields>,
 ) -> Result<StatusCode, AppError> {
@@ -155,36 +230,12 @@ pub async fn handle_actor_outbox(
         ActivityType::Delete => handle_delete(&message, &mut *connection).await?,
         _ => (),
     }
-
-    // store this message id for its audiences
-    let audiences_id = build_audiences_id(&message).map_err(|_| AppError::MessageNotValid)?;
-    for audience_id in audiences_id {
-        db::put_message_audience(&mut *connection, &message_id, &audience_id)
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
+    if message.type_() != ActivityType::View {
+        handle_view(&message, &mut *connection, &jwk).await?;
     }
 
-    // associate this message with its objects so they can be stored later
-    let objects_id: Vec<&str> = message
-        .object()
-        .as_vec()
-        .iter()
-        .map(|x| x.as_str())
-        .collect();
-    for object_id in objects_id {
-        db::put_message_body(&mut *connection, &message_id, object_id)
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
-    }
-
-    // store the message itself
-    let message = serde_json::to_string(&message).map_err(|_| AppError::MessageNotValid)?;
-    db::put_document_if_new(&mut *connection, &message_id, &message)
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-    db::put_message_id(&mut *connection, &message_id, &actor_id)
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
+    // then store
+    store_message(&message, &mut *connection).await?;
 
     connection
         .commit()
@@ -196,6 +247,8 @@ pub async fn handle_actor_outbox(
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use chatternet::model::{Body, BodyFields, BodyType, Collection, CollectionFields};
     use tokio;
     use tower::ServiceExt;
@@ -328,7 +381,14 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let message = build_follow(&["tag:1", "tag:2"], &jwk).await;
+        let message = build_follow(
+            vec![
+                URI::from_str("tag:1").unwrap(),
+                URI::from_str("tag:2").unwrap(),
+            ],
+            &jwk,
+        )
+        .await;
         let response = api
             .clone()
             .oneshot(request_json(

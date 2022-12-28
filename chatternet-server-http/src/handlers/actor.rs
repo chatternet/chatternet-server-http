@@ -2,18 +2,16 @@ use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::actor_id_from_did;
-use chatternet::model::{Actor, ActorFields, CollectionFields, CollectionType};
-use ssi::vc::URI;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use chatternet::model::{Actor, ActorFields, CollectionFields, CollectionType, URI};
 
 use super::error::AppError;
-use crate::db::{self, Connector};
+use super::AppState;
+use crate::db::{self};
 
 /// Get the Actor document with `did` using a DB connection obtained from
 /// `connector`.
 pub async fn handle_actor_get(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, .. }): State<AppState>,
     Path(did): Path<String>,
 ) -> Result<Json<ActorFields>, AppError> {
     let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
@@ -36,7 +34,7 @@ pub async fn handle_actor_get(
 /// Post an Actor `actor` for the actor with `did`. Stores the document using
 /// a DB connection obtained from `connector`.
 pub async fn handle_actor_post(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, .. }): State<AppState>,
     Path(did): Path<String>,
     Json(actor): Json<ActorFields>,
 ) -> Result<StatusCode, AppError> {
@@ -62,7 +60,7 @@ pub async fn handle_actor_post(
 
 /// Get the collection of IDs followed by the actor with `did`.
 pub async fn handle_actor_following(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, .. }): State<AppState>,
     Path(did): Path<String>,
 ) -> Result<Json<CollectionFields<String>>, AppError> {
     let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;

@@ -9,7 +9,6 @@ use ssi::jwk::JWK;
 use ssi::ldp::{now_ms, LinkedDataDocument};
 use ssi::ldp::{Error as LdpError, Proof};
 use ssi::rdf::DataSet;
-use std::str::FromStr;
 
 use crate::cid::{cid_from_json, uri_from_cid, CidVerifier};
 use crate::didkey::{actor_id_from_did, did_from_actor_id, did_from_jwk};
@@ -88,7 +87,7 @@ impl MessageFields {
     pub async fn new(
         jwk: &JWK,
         type_: ActivityType,
-        objects_id: &[impl AsRef<str>],
+        objects_id: Vec<URI>,
         to: Option<Vec<URI>>,
         cc: Option<Vec<URI>>,
         audience: Option<Vec<URI>>,
@@ -96,11 +95,6 @@ impl MessageFields {
     ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
         let actor_id = URI::try_from(actor_id_from_did(&did)?)?;
-        let objects_id: Result<Vec<URI>> = objects_id
-            .iter()
-            .map(|x| URI::from_str(x.as_ref()))
-            .collect();
-        let objects_id = objects_id?;
         let published = now_ms();
         let message = MessageNoIdProof {
             context: AstreamContext::new(),
@@ -227,6 +221,8 @@ impl Message for MessageFields {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use tokio;
 
     use super::*;
@@ -238,7 +234,7 @@ mod test {
         let message = MessageFields::new(
             &jwk,
             ActivityType::Create,
-            &["id:a"],
+            vec![URI::from_str("id:a").unwrap()],
             None,
             None,
             None,
@@ -255,7 +251,7 @@ mod test {
         let message = MessageFields::new(
             &jwk,
             ActivityType::Create,
-            &["id:a"],
+            vec![URI::from_str("id:a").unwrap()],
             None,
             None,
             None,
@@ -266,7 +262,10 @@ mod test {
         let message_diff = MessageFields::new(
             &jwk,
             ActivityType::Create,
-            &["id:a", "id:b"],
+            vec![
+                URI::from_str("id:a").unwrap(),
+                URI::from_str("id:b").unwrap(),
+            ],
             None,
             None,
             None,

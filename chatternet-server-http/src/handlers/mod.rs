@@ -2,6 +2,7 @@ use axum::http::{header, Method};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::Serialize;
+use ssi::jwk::JWK;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -26,7 +27,13 @@ pub struct ErrorMessage {
     message: String,
 }
 
-pub fn build_api(connector: Arc<RwLock<Connector>>, prefix: &str, _did: &str) -> Router {
+#[derive(Clone, Debug)]
+pub struct AppState {
+    pub connector: Arc<RwLock<Connector>>,
+    pub jwk: Arc<JWK>,
+}
+
+pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
 
     // CORS layer adds headers to responses to tell the browser that cross
@@ -66,17 +73,19 @@ pub fn build_api(connector: Arc<RwLock<Connector>>, prefix: &str, _did: &str) ->
                     header::CONTENT_TYPE,
                 ]),
         )
-        .with_state(connector)
+        .with_state(state)
 }
 
 #[cfg(test)]
 mod test_utils {
     use std::fmt::Debug;
+    use std::str::FromStr;
     use std::sync::Arc;
 
     use axum::body::Body;
     use axum::http::{self, Request, Response};
     use axum::routing::Router;
+    use chatternet::didkey::build_jwk;
     use chatternet::model::{ActivityType, MessageFields, URI};
     use hyper;
     use hyper::body::HttpBody;
@@ -86,7 +95,7 @@ mod test_utils {
     use ssi::jwk::JWK;
     use tokio::sync::RwLock;
 
-    use super::build_api;
+    use super::{build_api, AppState};
     use crate::db::Connector;
 
     pub async fn build_message_with_type(
@@ -101,9 +110,17 @@ mod test_utils {
         let cc = cc.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
         let audience =
             audience.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
-        MessageFields::new(&jwk, activity_type, &[document_id], to, cc, audience, None)
-            .await
-            .unwrap()
+        MessageFields::new(
+            &jwk,
+            activity_type,
+            vec![URI::from_str(document_id).unwrap()],
+            to,
+            cc,
+            audience,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     pub async fn build_message(
@@ -116,7 +133,7 @@ mod test_utils {
         build_message_with_type(jwk, ActivityType::Create, document_id, to, cc, audience).await
     }
 
-    pub async fn build_follow(follows_id: &[&str], jwk: &JWK) -> MessageFields {
+    pub async fn build_follow(follows_id: Vec<URI>, jwk: &JWK) -> MessageFields {
         MessageFields::new(
             &jwk,
             ActivityType::Follow,
@@ -169,7 +186,9 @@ mod test_utils {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
         ));
-        build_api(connector, "api", "did:example:server")
+        let jwk = Arc::new(build_jwk(&mut rand::thread_rng()).unwrap());
+        let state = AppState { connector, jwk };
+        build_api(state, "api", "did:example:server")
     }
 }
 
