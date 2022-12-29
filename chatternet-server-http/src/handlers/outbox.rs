@@ -162,6 +162,9 @@ async fn handle_view(
     let server_did = did_from_jwk(&jwk).map_err(|_| AppError::ServerMisconfigured)?;
     let server_actor_id =
         actor_id_from_did(&server_did).map_err(|_| AppError::ServerMisconfigured)?;
+    if message.actor().as_str() == server_actor_id.as_str() {
+        return Ok(());
+    }
     if !db::inbox_contains_message(&mut *connection, &server_actor_id, message.id().as_str())
         .await
         .map_err(|_| AppError::DbQueryFailed)?
@@ -223,6 +226,8 @@ pub async fn handle_actor_outbox(
         return Ok(StatusCode::ACCEPTED);
     };
 
+    store_message(&message, &mut *connection).await?;
+
     // run type-dependent side effects
     match message.type_() {
         // activity expresses a follow relationship
@@ -233,9 +238,6 @@ pub async fn handle_actor_outbox(
     if message.type_() != ActivityType::View {
         handle_view(&message, &mut *connection, &jwk).await?;
     }
-
-    // then store
-    store_message(&message, &mut *connection).await?;
 
     connection
         .commit()
@@ -249,7 +251,10 @@ pub async fn handle_actor_outbox(
 mod test {
     use std::str::FromStr;
 
-    use chatternet::model::{Body, BodyFields, BodyType, Collection, CollectionFields};
+    use chatternet::model::{
+        Body, BodyFields, BodyType, CollecitonPage, Collection, CollectionFields,
+        CollectionPageFields,
+    };
     use tokio;
     use tower::ServiceExt;
 
@@ -644,5 +649,103 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn views_message_from_followed() {
+        let jwk_server = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+
+        let api = build_test_api_jwk(jwk_server.clone()).await;
+
+        let did_server = did_from_jwk(&jwk_server).unwrap();
+        let did_1 = did_from_jwk(&jwk_1).unwrap();
+        let did_2 = did_from_jwk(&jwk_2).unwrap();
+
+        // server follows 1
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_server),
+                &build_follow(
+                    vec![URI::try_from(format!("{}/actor", did_1)).unwrap()],
+                    &jwk_server,
+                )
+                .await,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // from 1 to 1's followers
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_1),
+                &build_message(
+                    &jwk_1,
+                    "id:1",
+                    Some(vec![format!("{}/actor/followers", did_1)]),
+                    None,
+                    None,
+                )
+                .await,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2 has no messages (doesn't follow 1)
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_2),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inbox: CollectionPageFields<MessageFields> = get_body(response).await;
+        assert!(inbox.items().is_empty());
+
+        // 2 follows server
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_2),
+                &build_follow(
+                    vec![URI::try_from(format!("{}/actor", did_server)).unwrap()],
+                    &jwk_2,
+                )
+                .await,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2 follows server follows 1 so get 1's message
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_2),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inbox: CollectionPageFields<MessageFields> = get_body(response).await;
+        assert_eq!(
+            inbox
+                .items()
+                .iter()
+                .map(|x| x.object().as_vec().iter().map(|x| x.as_str()))
+                .flatten()
+                .collect::<Vec<&str>>(),
+            ["id:1"]
+        );
     }
 }

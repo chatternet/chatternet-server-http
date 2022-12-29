@@ -182,6 +182,17 @@ mod test_utils {
             .unwrap()
     }
 
+    pub async fn build_test_api_jwk(jwk: JWK) -> Router {
+        let connector = Arc::new(RwLock::new(
+            Connector::new("sqlite::memory:").await.unwrap(),
+        ));
+        let state = AppState {
+            connector,
+            jwk: Arc::new(jwk),
+        };
+        build_api(state, "api", "did:example:server")
+    }
+
     pub async fn build_test_api() -> Router {
         let connector = Arc::new(RwLock::new(
             Connector::new("sqlite::memory:").await.unwrap(),
