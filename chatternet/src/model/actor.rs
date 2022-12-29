@@ -139,6 +139,7 @@ pub trait Actor: ProofVerifier<ActorNoProof> {
     fn following(&self) -> &URI;
     fn followers(&self) -> &URI;
     fn name(&self) -> &Option<ActorName>;
+    fn url(&self) -> &Option<URI>;
 
     async fn verify(&self) -> Result<()> {
         let actor_id = self.id().as_str();
@@ -189,6 +190,9 @@ impl Actor for ActorFields {
     }
     fn name(&self) -> &Option<ActorName> {
         &self.no_proof.name
+    }
+    fn url(&self) -> &Option<URI> {
+        &self.no_proof.url
     }
     fn proof(&self) -> &Proof {
         &self.proof

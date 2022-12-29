@@ -8,11 +8,10 @@ use axum::http::StatusCode;
 use did_method_key::DIDKey;
 use serde_json::Value;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use super::error::AppError;
-use crate::db::{self, Connector};
+use super::AppState;
+use crate::db::{self};
 use chatternet::model::{Body, BodyFields, BodyType};
 
 /// Handle a get request for a document with ID `id`.
@@ -20,7 +19,7 @@ use chatternet::model::{Body, BodyFields, BodyType};
 /// Generates a DID document if a the ID is a DID, otherwise will lookup
 /// the ID in the document table.
 pub async fn handle_document_get(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, .. }): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
     // if this is just a DID, generate its corresponding DID document
@@ -54,7 +53,7 @@ pub async fn handle_document_get(
 
 /// Handle a post request for a message body `body` with ID `id`.
 pub async fn handle_body_post(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, .. }): State<AppState>,
     Path(id): Path<String>,
     Json(body): Json<BodyFields>,
 ) -> Result<StatusCode, AppError> {

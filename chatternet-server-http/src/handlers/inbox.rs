@@ -5,11 +5,9 @@ use chatternet::{
     model::{new_inbox, CollectionPageFields, MessageFields},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
 
-use super::error::AppError;
-use crate::db::{self, Connector, InboxOut};
+use super::{error::AppError, AppState};
+use crate::db::{self, InboxOut};
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +17,7 @@ pub struct DidInboxQuery {
 }
 
 pub async fn handle_inbox(
-    State(connector): State<Arc<RwLock<Connector>>>,
+    State(AppState { connector, .. }): State<AppState>,
     Path(did): Path<String>,
     Query(query): Query<DidInboxQuery>,
 ) -> Result<Json<CollectionPageFields<MessageFields>>, AppError> {
@@ -60,7 +58,7 @@ pub async fn handle_inbox(
 mod test {
     use axum::http::StatusCode;
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{CollecitonPage, Message};
+    use chatternet::model::{CollecitonPage, Message, URI};
     use tokio;
     use tower::ServiceExt;
 
@@ -168,7 +166,11 @@ mod test {
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor/outbox", did_1),
-                &build_follow(&[&format!("{}/actor", did_2)], &jwk_1).await,
+                &build_follow(
+                    vec![URI::try_from(format!("{}/actor", did_2)).unwrap()],
+                    &jwk_1,
+                )
+                .await,
             ))
             .await
             .unwrap();

@@ -1,8 +1,7 @@
 use anyhow::Result;
-use ssi::vc::URI;
 use tap::Pipe;
 
-use super::{CollectionPageFields, CollectionPageType, MessageFields};
+use super::{CollectionPageFields, CollectionPageType, MessageFields, URI};
 
 pub fn new_inbox(
     actor_id: &str,
@@ -38,6 +37,8 @@ pub fn new_inbox(
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+
     use tokio;
 
     use super::*;
@@ -50,7 +51,7 @@ mod test {
         let message = MessageFields::new(
             &jwk,
             ActivityType::Create,
-            &["id:a"],
+            vec![URI::from_str("id:a").unwrap()],
             None,
             None,
             None,

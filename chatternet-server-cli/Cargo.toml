@@ -1,20 +1,27 @@
 [package]
-name = "chatternet"
+name = "chatternet-server-cli"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "new-actor"
+path = "src/new-actor/main.rs"
+
+[[bin]]
+name = "edit-db"
+path = "src/edit-db/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0.66"
-async-trait = "0.1.58"
-chrono = "0.4.22"
-cid = "0.8.6"
+base64 = "0.13.1"
+chatternet = { path = "../chatternet" }
+chatternet-server-http = { path = "../chatternet-server-http" }
+clap = { version = "4.0.18", features = ["derive"] }
 did-method-key = { git = "https://github.com/spruceid/ssi", rev="80be3ef98a68db75b5e8af32b258bc9d64374305" }
 ed25519-dalek = "1.0.1"
-lazy_static = "1.4.0"
 rand = "0.8.5"
-regex = "1.7.0"
 serde = { version = "1.0.147", features = ["derive"] }
 serde_json = "1.0.87"
 ssi = { git = "https://github.com/spruceid/ssi", rev="80be3ef98a68db75b5e8af32b258bc9d64374305" }

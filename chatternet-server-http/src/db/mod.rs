@@ -107,6 +107,39 @@ pub async fn get_inbox_for_actor(
     })
 }
 
+pub async fn inbox_contains_message(
+    connection: &mut SqliteConnection,
+    actor_id: &str,
+    message_id: &str,
+) -> Result<bool> {
+    let query = sqlx::query(
+        "\
+        SELECT 1 FROM `Messages` \
+        WHERE `message_id` = $2 \
+        AND ( \
+            `Messages`.`actor_id` = $1
+            OR `actor_id` IN (\
+                SELECT `following_id` FROM `ActorsFollowings` \
+                WHERE `ActorsFollowings`.`actor_id` = $1 \
+            )
+        ) \
+        AND `message_id` IN (\
+            SELECT `message_id` FROM `MessagesAudiences` \
+            WHERE `MessagesAudiences`.`audience_id` = $1
+            OR `MessagesAudiences`.`audience_id` IN (\
+                SELECT `audience_id` FROM `ActorsAudiences` \
+                WHERE `ActorsAudiences`.`actor_id` = $1
+            )\
+        ) \
+        LIMIT 1;\
+        ",
+    )
+    .bind(actor_id)
+    .bind(message_id);
+    Ok(query.fetch_optional(&mut *connection).await?.is_some())
+}
+
+#[derive(Debug)]
 pub struct Connector {
     pool_read: Option<SqlitePool>,
     pool_write: SqlitePool,
@@ -184,7 +217,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn db_gets_inbox_for_actor() {
+    async fn db_gets_inbox_and_has_message_for_actor() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
 
@@ -273,6 +306,33 @@ mod test {
         assert_eq!(out.messages, ["message 3", "message 2", "message 1"]);
         assert_eq!(out.low_idx, 1);
         assert_eq!(out.high_idx, 3);
+
+        // identifies which messages are in the inbox
+        assert!(
+            inbox_contains_message(&mut connection, "did:1/actor", "id:1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            inbox_contains_message(&mut connection, "did:1/actor", "id:2")
+                .await
+                .unwrap()
+        );
+        assert!(
+            inbox_contains_message(&mut connection, "did:1/actor", "id:3")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !inbox_contains_message(&mut connection, "did:1/actor", "id:4")
+                .await
+                .unwrap()
+        );
+        assert!(
+            !inbox_contains_message(&mut connection, "did:2/actor", "id:1")
+                .await
+                .unwrap()
+        );
 
         let out = get_inbox_for_actor(&mut connection, "did:1/actor", 3, Some(2))
             .await

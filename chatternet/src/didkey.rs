@@ -3,7 +3,9 @@
 use anyhow::{Error, Result};
 use did_method_key::DIDKey;
 use ed25519_dalek::{Keypair, PublicKey, SecretKey, SECRET_KEY_LENGTH};
+use lazy_static::lazy_static;
 use rand::{CryptoRng, RngCore};
+use regex::Regex;
 use ssi::did::{DIDMethod, Source};
 use ssi::jwk::{Base64urlUInt, OctetParams, Params, JWK};
 
@@ -29,12 +31,16 @@ pub fn did_from_jwk(jwk: &JWK) -> Result<String> {
         .ok_or(Error::msg("key pair cannot be represented as a DID"))
 }
 
+lazy_static! {
+    static ref RE_DID: Regex = Regex::new(r"^did:key:z[a-km-zA-HJ-NP-Z1-9]+$").unwrap();
+}
+
 /// Build the ChatterNet actor ID from the given `did`.
 ///
 /// The `did` is already a URI, this appends the `/actor` path to it.
 pub fn actor_id_from_did(did: &str) -> Result<String> {
-    if !did.starts_with("did:") {
-        Err(Error::msg("DID has invalid prefix"))?;
+    if !RE_DID.is_match(did) {
+        Err(Error::msg("DID has invalid characters"))?;
     }
     Ok(format!("{}/actor", did))
 }
@@ -44,8 +50,8 @@ pub fn did_from_actor_id(actor_id: &str) -> Result<String> {
     let (did, path) = actor_id
         .split_once("/")
         .ok_or(Error::msg("actor ID is not a did and path"))?;
-    if !did.starts_with("did:") {
-        Err(Error::msg("actor ID is not a DID"))?;
+    if !RE_DID.is_match(did) {
+        Err(Error::msg("acotr ID doesn't contain a valid DID"))?;
     }
     if path != "actor" {
         Err(Error::msg("actor ID path is not an actor"))?;
@@ -71,19 +77,14 @@ mod test {
 
     #[test]
     fn transforms_did_to_and_from_actor_id() {
-        assert_eq!(
-            actor_id_from_did("did:example:a").unwrap(),
-            "did:example:a/actor"
-        );
-        actor_id_from_did("did").unwrap_err();
+        assert_eq!(actor_id_from_did("did:key:za").unwrap(), "did:key:za/actor");
+        actor_id_from_did("did:other:za").unwrap_err();
+        actor_id_from_did("did:key:invalid").unwrap_err();
         actor_id_from_did("").unwrap_err();
-        assert_eq!(
-            did_from_actor_id("did:example:a/actor").unwrap(),
-            "did:example:a"
-        );
-        did_from_actor_id("did:example:a/other").unwrap_err();
-        did_from_actor_id("did:example:a/").unwrap_err();
-        did_from_actor_id("did:example:a").unwrap_err();
+        assert_eq!(did_from_actor_id("did:key:za/actor").unwrap(), "did:key:za");
+        did_from_actor_id("did:key:za/other").unwrap_err();
+        did_from_actor_id("did:key:za/").unwrap_err();
+        did_from_actor_id("did:key:za").unwrap_err();
         did_from_actor_id("").unwrap_err();
     }
 }
