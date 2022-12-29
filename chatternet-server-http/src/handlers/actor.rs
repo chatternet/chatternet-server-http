@@ -169,7 +169,7 @@ mod test {
         let api = build_test_api().await;
         let response = api
             .clone()
-            .oneshot(request_empty("GET", "/api/ap/did:example:a/actor"))
+            .oneshot(request_empty("GET", "/api/ap/did:key:za/actor"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);

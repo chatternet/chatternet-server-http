@@ -21,7 +21,9 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Follow { did: URI },
+    Follow { actor_id: URI },
+    ListFollows { actor_id: URI },
+    ListServerFollows,
 }
 
 #[tokio::main]
@@ -38,16 +40,27 @@ async fn main() -> Result<()> {
     .await?;
 
     match args.command {
-        Commands::Follow { did } => {
+        Commands::Follow { actor_id } => {
             let mut connection = connector.connection_mut().await?;
-            let follow_id = actor_id_from_did(did.as_str())?;
-            db::put_actor_following(&mut *connection, &server_actor_id, &follow_id).await?;
+            db::put_actor_following(&mut *connection, &server_actor_id, actor_id.as_str()).await?;
             db::put_actor_audience(
                 &mut *connection,
                 &server_actor_id,
-                &format!("{}/followers", follow_id),
+                &format!("{}/followers", actor_id.as_str()),
             )
             .await?;
+        }
+        Commands::ListFollows { actor_id } => {
+            let mut connection = connector.connection_mut().await?;
+            for id in db::get_actor_followings(&mut *connection, actor_id.as_str()).await? {
+                println!("{}", id);
+            }
+        }
+        Commands::ListServerFollows => {
+            let mut connection = connector.connection_mut().await?;
+            for id in db::get_actor_followings(&mut *connection, &server_actor_id).await? {
+                println!("{}", id);
+            }
         }
     };
 
