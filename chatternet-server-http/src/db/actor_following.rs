@@ -77,6 +77,26 @@ pub async fn get_actor_followings(
     Ok(followings_id)
 }
 
+pub async fn get_actor_followers(
+    connection: &mut SqliteConnection,
+    actor_id: &str,
+) -> Result<Vec<String>> {
+    let query = sqlx::query(
+        "\
+        SELECT `actor_id` FROM `ActorsFollowings` \
+        WHERE `following_id` = $1;\
+        ",
+    )
+    .bind(actor_id);
+    let mut followings_id = Vec::new();
+    let mut rows = query.fetch(&mut *connection);
+    while let Some(row) = rows.try_next().await? {
+        let following_id: &str = row.try_get("actor_id")?;
+        followings_id.push(following_id.to_string());
+    }
+    Ok(followings_id)
+}
+
 #[cfg(test)]
 mod test {
     use tokio;
@@ -85,7 +105,7 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn puts_and_gets_actor_followings() {
+    async fn puts_and_gets_actor_followings_followers() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
         put_actor_following(&mut connection, "did:1/actor", "did:2/actor")
@@ -98,16 +118,16 @@ mod test {
             .await
             .unwrap();
         assert_eq!(
-            get_actor_followings(&mut connection, "did:1/actor")
-                .await
-                .unwrap(),
-            ["did:2/actor"]
-        );
-        assert_eq!(
             get_actor_followings(&mut connection, "did:2/actor")
                 .await
                 .unwrap(),
             ["did:1/actor", "did:3/actor"]
+        );
+        assert_eq!(
+            get_actor_followers(&mut connection, "did:2/actor")
+                .await
+                .unwrap(),
+            ["did:1/actor"]
         );
     }
 }

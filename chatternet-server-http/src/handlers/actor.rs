@@ -78,6 +78,26 @@ pub async fn handle_actor_following(
     Ok(Json(following))
 }
 
+/// Get the collection of IDs of follower of the actor with `did`.
+pub async fn handle_actor_followers(
+    State(AppState { connector, .. }): State<AppState>,
+    Path(did): Path<String>,
+) -> Result<Json<CollectionFields<String>>, AppError> {
+    let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
+    let connector = connector.read().await;
+    let mut connection = connector
+        .connection()
+        .await
+        .map_err(|_| AppError::DbConnectionFailed)?;
+    let ids = db::get_actor_followers(&mut *connection, &actor_id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    let uri =
+        URI::try_from(format!("{}/followers", actor_id)).map_err(|_| AppError::ActorIdWrong)?;
+    let following = CollectionFields::new(uri, CollectionType::Collection, ids);
+    Ok(Json(following))
+}
+
 #[cfg(test)]
 mod test {
     use axum::http::StatusCode;
@@ -86,7 +106,7 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{Actor, ActorFields, ActorType};
+    use chatternet::model::{Actor, ActorFields, ActorType, Collection, CollectionFields, URI};
 
     use super::super::test_utils::*;
 
@@ -173,5 +193,86 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn gets_following_followers() {
+        let api = build_test_api().await;
+
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+
+        let did_1 = did_from_jwk(&jwk_1).unwrap();
+        let did_2 = did_from_jwk(&jwk_2).unwrap();
+
+        // 1 follows 1, 2 and a
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_1),
+                &build_follow(
+                    vec![
+                        URI::try_from(format!("{}/actor", did_1)).unwrap(),
+                        URI::try_from(format!("{}/actor", did_2)).unwrap(),
+                        URI::try_from("did:key:za/actor".to_string()).unwrap(),
+                    ],
+                    &jwk_1,
+                )
+                .await,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // 2 follows self
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did_2),
+                &build_follow(
+                    vec![URI::try_from(format!("{}/actor", did_2)).unwrap()],
+                    &jwk_2,
+                )
+                .await,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/following", did_1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inbox: CollectionFields<String> = get_body(response).await;
+        assert_eq!(
+            inbox.items(),
+            &[
+                format!("{}/actor", did_1),
+                format!("{}/actor", did_2),
+                "did:key:za/actor".to_string(),
+            ]
+        );
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/followers", did_2),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inbox: CollectionFields<String> = get_body(response).await;
+        assert_eq!(
+            inbox.items(),
+            &[format!("{}/actor", did_1), format!("{}/actor", did_2),]
+        );
     }
 }

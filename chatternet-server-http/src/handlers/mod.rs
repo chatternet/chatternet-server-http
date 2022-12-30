@@ -56,6 +56,7 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                         // actor-specific handlers
                         .route("/:id/actor", get(handle_actor_get).post(handle_actor_post))
                         .route("/:id/actor/following", get(handle_actor_following))
+                        .route("/:id/actor/followers", get(handle_actor_followers))
                         .route("/:id/actor/outbox", post(handle_actor_outbox))
                         .route("/:id/actor/inbox", get(handle_inbox))
                         .route("/:id", get(handle_document_get).post(handle_body_post)),
