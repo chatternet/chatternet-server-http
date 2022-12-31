@@ -1,7 +1,7 @@
 use axum::http::{header, Method};
 use axum::routing::{get, post};
 use axum::Router;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ssi::jwk::JWK;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -31,6 +31,13 @@ pub struct ErrorMessage {
 pub struct AppState {
     pub connector: Arc<RwLock<Connector>>,
     pub jwk: Arc<JWK>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionPageQuery {
+    page_size: Option<u64>,
+    start_idx: Option<u64>,
 }
 
 pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {

@@ -252,7 +252,7 @@ mod test {
     use std::str::FromStr;
 
     use chatternet::model::{
-        Body, BodyFields, BodyType, CollecitonPage, Collection, CollectionFields,
+        Body, BodyFields, BodyType, Collection, CollectionFields, CollectionPage,
         CollectionPageFields,
     };
     use tokio;
