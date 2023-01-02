@@ -43,7 +43,7 @@ mod test {
 
     use super::*;
     use crate::didkey::build_jwk;
-    use crate::model::{ActivityType, CollecitonPage, Message};
+    use crate::model::{ActivityType, CollectionPage, Message};
 
     #[tokio::test]
     async fn builds_inbox() {
@@ -63,7 +63,7 @@ mod test {
 
         let inbox = new_inbox("did:example:a", vec![message.clone()], 4, 0, Some(3)).unwrap();
         assert_eq!(
-            CollecitonPage::id(&inbox).as_str(),
+            CollectionPage::id(&inbox).as_str(),
             "did:example:a/inbox?startIdx=0&pageSize=4"
         );
         assert_eq!(inbox.part_of().as_str(), "did:example:a/inbox");

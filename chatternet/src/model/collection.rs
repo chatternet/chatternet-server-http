@@ -86,7 +86,7 @@ impl<T> CollectionPageFields<T> {
     }
 }
 
-pub trait CollecitonPage<T> {
+pub trait CollectionPage<T> {
     fn id(&self) -> &URI;
     fn type_(&self) -> CollectionPageType;
     fn items(&self) -> &Vec<T>;
@@ -94,7 +94,7 @@ pub trait CollecitonPage<T> {
     fn next(&self) -> &Option<URI>;
 }
 
-impl<T> CollecitonPage<T> for CollectionPageFields<T> {
+impl<T> CollectionPage<T> for CollectionPageFields<T> {
     fn id(&self) -> &URI {
         &self.id
     }

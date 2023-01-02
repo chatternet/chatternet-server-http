@@ -33,8 +33,8 @@ fn joint_id(ids: &[&str]) -> String {
 }
 
 #[derive(Debug)]
-pub struct InboxOut {
-    pub messages: Vec<String>,
+pub struct CollectionPageOut {
+    pub items: Vec<String>,
     pub low_idx: u64,
     pub high_idx: u64,
 }
@@ -44,7 +44,7 @@ pub async fn get_inbox_for_actor(
     actor_id: &str,
     count: u64,
     start_idx: Option<u64>,
-) -> Result<Option<InboxOut>> {
+) -> Result<Option<CollectionPageOut>> {
     let query_str = format!(
         "\
         SELECT `idx`, `document` FROM `Documents` \
@@ -98,8 +98,8 @@ pub async fn get_inbox_for_actor(
         last_idx = last_idx.map(|x| x.max(idx as u64)).or(Some(idx as u64));
     }
     Ok(match (first_idx, last_idx) {
-        (Some(first_idx), Some(last_idx)) => Some(InboxOut {
-            messages,
+        (Some(first_idx), Some(last_idx)) => Some(CollectionPageOut {
+            items: messages,
             low_idx: first_idx,
             high_idx: last_idx,
         }),
@@ -266,7 +266,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(out.messages, ["message 1"]);
+        assert_eq!(out.items, ["message 1"]);
         assert_eq!(out.low_idx, 1);
         assert_eq!(out.high_idx, 1);
 
@@ -278,7 +278,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(out.messages, ["message 2", "message 1"]);
+        assert_eq!(out.items, ["message 2", "message 1"]);
         assert_eq!(out.low_idx, 1);
         assert_eq!(out.high_idx, 2);
 
@@ -291,7 +291,7 @@ mod test {
             .unwrap()
             .unwrap();
         // but not a contact of did:2 so can't get messages
-        assert_eq!(out.messages, ["message 2"]);
+        assert_eq!(out.items, ["message 2"]);
         assert_eq!(out.low_idx, 2);
         assert_eq!(out.high_idx, 2);
 
@@ -303,7 +303,7 @@ mod test {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(out.messages, ["message 3", "message 2", "message 1"]);
+        assert_eq!(out.items, ["message 3", "message 2", "message 1"]);
         assert_eq!(out.low_idx, 1);
         assert_eq!(out.high_idx, 3);
 
@@ -339,7 +339,7 @@ mod test {
             .unwrap()
             .unwrap();
         // can paginate
-        assert_eq!(out.messages, ["message 2", "message 1"]);
+        assert_eq!(out.items, ["message 2", "message 1"]);
         assert_eq!(out.low_idx, 1);
         assert_eq!(out.high_idx, 2);
     }

@@ -1,7 +1,7 @@
 use axum::http::{header, Method};
 use axum::routing::{get, post};
 use axum::Router;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ssi::jwk::JWK;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -33,6 +33,13 @@ pub struct AppState {
     pub jwk: Arc<JWK>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionPageQuery {
+    page_size: Option<u64>,
+    start_idx: Option<u64>,
+}
+
 pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -56,6 +63,7 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                         // actor-specific handlers
                         .route("/:id/actor", get(handle_actor_get).post(handle_actor_post))
                         .route("/:id/actor/following", get(handle_actor_following))
+                        .route("/:id/actor/followers", get(handle_actor_followers))
                         .route("/:id/actor/outbox", post(handle_actor_outbox))
                         .route("/:id/actor/inbox", get(handle_inbox))
                         .route("/:id", get(handle_document_get).post(handle_body_post)),

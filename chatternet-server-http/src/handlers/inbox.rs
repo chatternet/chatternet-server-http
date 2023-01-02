@@ -4,22 +4,14 @@ use chatternet::{
     didkey::actor_id_from_did,
     model::{new_inbox, CollectionPageFields, MessageFields},
 };
-use serde::{Deserialize, Serialize};
 
-use super::{error::AppError, AppState};
-use crate::db::{self, InboxOut};
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DidInboxQuery {
-    page_size: Option<u64>,
-    start_idx: Option<u64>,
-}
+use super::{error::AppError, AppState, CollectionPageQuery};
+use crate::db::{self, CollectionPageOut};
 
 pub async fn handle_inbox(
     State(AppState { connector, .. }): State<AppState>,
     Path(did): Path<String>,
-    Query(query): Query<DidInboxQuery>,
+    Query(query): Query<CollectionPageQuery>,
 ) -> Result<Json<CollectionPageFields<MessageFields>>, AppError> {
     let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
     let page_size = query.page_size.unwrap_or(32);
@@ -32,8 +24,8 @@ pub async fn handle_inbox(
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     let inbox = match inbox_out {
-        Some(InboxOut {
-            messages,
+        Some(CollectionPageOut {
+            items: messages,
             low_idx,
             high_idx,
         }) => {
@@ -58,7 +50,7 @@ pub async fn handle_inbox(
 mod test {
     use axum::http::StatusCode;
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{CollecitonPage, Message, URI};
+    use chatternet::model::{CollectionPage, Message, URI};
     use tokio;
     use tower::ServiceExt;
 
