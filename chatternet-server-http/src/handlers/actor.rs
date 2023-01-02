@@ -307,10 +307,7 @@ mod test {
         let inbox: CollectionPageFields<String> = get_body(response).await;
         assert_eq!(
             inbox.items(),
-            &[
-                format!("{}/actor", did_2),
-                format!("{}/actor", did_1),
-            ]
+            &[format!("{}/actor", did_2), format!("{}/actor", did_1),]
         );
     }
 }

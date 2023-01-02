@@ -10,7 +10,7 @@ pub async fn create_actor_following(connection: &mut SqliteConnection) -> Result
         CREATE TABLE IF NOT EXISTS `ActorsFollowings` \
         (\
             `idx` INTEGER PRIMARY KEY AUTOINCREMENT,
-            `joint_id` TEXT NOT NULL, \
+            `joint_id` TEXT UNIQUE NOT NULL, \
             `actor_id` TEXT NOT NULL, \
             `following_id` TEXT NOT NULL\
         );\
