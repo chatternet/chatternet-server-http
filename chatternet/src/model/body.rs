@@ -35,6 +35,7 @@ pub struct BodyNoId {
     type_: BodyType,
     content: Option<String>,
     media_type: Option<String>,
+    in_reply_to: Option<URI>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -49,6 +50,7 @@ impl BodyFields {
         type_: BodyType,
         content: Option<String>,
         media_type: Option<String>,
+        in_reply_to: Option<URI>,
     ) -> Result<Self> {
         if type_ == BodyType::Note && content.as_ref().map_or(false, |x| x.len() > MAX_BODY_BYTES) {
             Err(Error::msg("note content is too long"))?
@@ -58,6 +60,7 @@ impl BodyFields {
             type_,
             content,
             media_type,
+            in_reply_to,
         };
         let id =
             uri_from_cid(cid_from_json(&object, &mut new_context_loader(), None).await?).unwrap();
@@ -119,6 +122,7 @@ mod test {
             BodyType::Note,
             Some("abc".to_string()),
             Some("text/html".to_string()),
+            Some("urn:cid:a".to_string().try_into().unwrap()),
         )
         .await
         .unwrap();
@@ -135,6 +139,7 @@ mod test {
                     .collect::<String>(),
             ),
             None,
+            None,
         )
         .await
         .unwrap_err();
@@ -142,7 +147,9 @@ mod test {
 
     #[tokio::test]
     async fn doesnt_verify_note_too_long() {
-        let body = BodyFields::new(BodyType::Note, None, None).await.unwrap();
+        let body = BodyFields::new(BodyType::Note, None, None, None)
+            .await
+            .unwrap();
         let mut body = serde_json::to_value(&body).unwrap();
         body.as_object_mut().unwrap().insert(
             "content".to_string(),
@@ -159,7 +166,7 @@ mod test {
 
     #[tokio::test]
     async fn doesnt_verify_modified_data() {
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None)
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None)
             .await
             .unwrap();
         body.verify().await.unwrap();
