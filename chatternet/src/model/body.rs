@@ -35,6 +35,7 @@ pub struct BodyNoId {
     type_: BodyType,
     content: Option<String>,
     media_type: Option<String>,
+    attributed_to: Option<URI>,
     in_reply_to: Option<URI>,
 }
 
@@ -50,6 +51,7 @@ impl BodyFields {
         type_: BodyType,
         content: Option<String>,
         media_type: Option<String>,
+        attributed_to: Option<URI>,
         in_reply_to: Option<URI>,
     ) -> Result<Self> {
         if type_ == BodyType::Note && content.as_ref().map_or(false, |x| x.len() > MAX_BODY_BYTES) {
@@ -60,6 +62,7 @@ impl BodyFields {
             type_,
             content,
             media_type,
+            attributed_to,
             in_reply_to,
         };
         let id =
@@ -122,6 +125,7 @@ mod test {
             BodyType::Note,
             Some("abc".to_string()),
             Some("text/html".to_string()),
+            Some("did:example:a".to_string().try_into().unwrap()),
             Some("urn:cid:a".to_string().try_into().unwrap()),
         )
         .await
@@ -140,6 +144,7 @@ mod test {
             ),
             None,
             None,
+            None,
         )
         .await
         .unwrap_err();
@@ -147,7 +152,7 @@ mod test {
 
     #[tokio::test]
     async fn doesnt_verify_note_too_long() {
-        let body = BodyFields::new(BodyType::Note, None, None, None)
+        let body = BodyFields::new(BodyType::Note, None, None, None, None)
             .await
             .unwrap();
         let mut body = serde_json::to_value(&body).unwrap();
@@ -166,7 +171,7 @@ mod test {
 
     #[tokio::test]
     async fn doesnt_verify_modified_data() {
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None)
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None, None)
             .await
             .unwrap();
         body.verify().await.unwrap();
