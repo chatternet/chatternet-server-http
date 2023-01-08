@@ -424,7 +424,7 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None)
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None, None)
             .await
             .unwrap();
         let message = build_message(&jwk, body.id().as_str(), None, None, None).await;
@@ -518,7 +518,7 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None)
+        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None, None)
             .await
             .unwrap();
         let message_1 = build_message(&jwk, body.id().as_str(), None, None, None).await;
