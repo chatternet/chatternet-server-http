@@ -14,6 +14,8 @@ use super::AppState;
 use crate::db::{self};
 use chatternet::model::{Body, BodyFields, BodyType};
 
+const MAX_BODY_BYTES: usize = 1024;
+
 /// Handle a get request for a document with ID `id`.
 ///
 /// Generates a DID document if a the ID is a DID, otherwise will lookup
@@ -65,8 +67,13 @@ pub async fn handle_body_post(
     if body.id().as_str() != id {
         Err(AppError::DocumentIdWrong)?;
     }
-    // NOTE: for now accept only Notes (they have max size)
-    if body.type_() != BodyType::Note {
+    // NOTE: for now accept only Notes with max size
+    if body.type_() != BodyType::Note
+        || body
+            .content()
+            .as_ref()
+            .map_or(false, |x| x.len() > MAX_BODY_BYTES)
+    {
         Err(AppError::DocumentNotValid)?;
     }
     // only accept body if a known (signed) message is associated with it

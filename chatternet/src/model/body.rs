@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -7,8 +7,6 @@ use crate::model::URI;
 use crate::new_context_loader;
 
 use super::AstreamContext;
-
-const MAX_BODY_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum BodyType {
@@ -54,9 +52,6 @@ impl BodyFields {
         attributed_to: Option<URI>,
         in_reply_to: Option<URI>,
     ) -> Result<Self> {
-        if type_ == BodyType::Note && content.as_ref().map_or(false, |x| x.len() > MAX_BODY_BYTES) {
-            Err(Error::msg("note content is too long"))?
-        }
         let object = BodyNoId {
             context: AstreamContext::new(),
             type_,
@@ -85,14 +80,6 @@ pub trait Body: CidVerifier<BodyNoId> {
     fn content(&self) -> &Option<String>;
 
     async fn verify(&self) -> Result<()> {
-        if self.type_() == BodyType::Note
-            && self
-                .content()
-                .as_ref()
-                .map_or(false, |x| x.len() > MAX_BODY_BYTES)
-        {
-            Err(Error::msg("note content is too long"))?
-        }
         self.verify_cid().await?;
         Ok(())
     }
@@ -131,42 +118,6 @@ mod test {
         .await
         .unwrap();
         body.verify().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn doesnt_build_note_too_long() {
-        BodyFields::new(
-            BodyType::Note,
-            Some(
-                std::iter::repeat("a")
-                    .take(MAX_BODY_BYTES + 1)
-                    .collect::<String>(),
-            ),
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap_err();
-    }
-
-    #[tokio::test]
-    async fn doesnt_verify_note_too_long() {
-        let body = BodyFields::new(BodyType::Note, None, None, None, None)
-            .await
-            .unwrap();
-        let mut body = serde_json::to_value(&body).unwrap();
-        body.as_object_mut().unwrap().insert(
-            "content".to_string(),
-            serde_json::to_value(
-                &std::iter::repeat("a")
-                    .take(MAX_BODY_BYTES + 1)
-                    .collect::<String>(),
-            )
-            .unwrap(),
-        );
-        let body: BodyFields = serde_json::from_value(body).unwrap();
-        body.verify().await.unwrap_err();
     }
 
     #[tokio::test]
