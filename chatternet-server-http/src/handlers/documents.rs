@@ -12,9 +12,7 @@ use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use super::error::AppError;
 use super::AppState;
 use crate::db::{self};
-use chatternet::model::{Body, BodyFields, BodyType};
-
-const MAX_BODY_BYTES: usize = 1024;
+use chatternet::model::{Note1k, Note1kFields};
 
 /// Handle a get request for a document with ID `id`.
 ///
@@ -57,7 +55,7 @@ pub async fn handle_document_get(
 pub async fn handle_body_post(
     State(AppState { connector, .. }): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<BodyFields>,
+    Json(body): Json<Note1kFields>,
 ) -> Result<StatusCode, AppError> {
     let mut connector = connector.write().await;
     let mut connection = connector
@@ -66,15 +64,6 @@ pub async fn handle_body_post(
         .map_err(|_| AppError::DbConnectionFailed)?;
     if body.id().as_str() != id {
         Err(AppError::DocumentIdWrong)?;
-    }
-    // NOTE: for now accept only Notes with max size
-    if body.type_() != BodyType::Note
-        || body
-            .content()
-            .as_ref()
-            .map_or(false, |x| x.len() > MAX_BODY_BYTES)
-    {
-        Err(AppError::DocumentNotValid)?;
     }
     // only accept body if a known (signed) message is associated with it
     if !db::has_message_with_body(&mut *connection, &id)
@@ -103,7 +92,7 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{Body, BodyFields, BodyType};
+    use chatternet::model::{Note1k, Note1kFields, NoteType};
 
     use super::super::test_utils::*;
 
@@ -154,7 +143,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = BodyFields::new(BodyType::Note, None, None, None, None)
+        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
         let body_id = body.id().as_str();
@@ -187,7 +176,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body_back: Option<BodyFields> = get_body(response).await;
+        let body_back: Option<Note1kFields> = get_body(response).await;
         let body_back = body_back.unwrap();
         assert_eq!(body_back.id(), body.id());
     }
@@ -199,7 +188,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = BodyFields::new(BodyType::Note, None, None, None, None)
+        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
         let body_id = body.id().as_str();
@@ -260,7 +249,7 @@ mod test {
     #[tokio::test]
     async fn wont_post_unknown() {
         let api = build_test_api().await;
-        let document = BodyFields::new(BodyType::Note, None, None, None, None)
+        let document = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
         let document_id = document.id().as_str();

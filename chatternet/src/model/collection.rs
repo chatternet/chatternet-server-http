@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{AstreamContext, URI};
+use super::{CtxSigStream, URI};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CollectionType {
@@ -12,7 +12,7 @@ pub enum CollectionType {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionFields<T> {
     #[serde(rename = "@context")]
-    context: AstreamContext,
+    context: CtxSigStream,
     id: URI,
     #[serde(rename = "type")]
     type_: CollectionType,
@@ -22,7 +22,7 @@ pub struct CollectionFields<T> {
 impl<T> CollectionFields<T> {
     pub fn new(id: URI, type_: CollectionType, items: Vec<T>) -> Self {
         CollectionFields {
-            context: AstreamContext::new(),
+            context: CtxSigStream::new(),
             id,
             type_,
             items,
@@ -58,7 +58,7 @@ pub enum CollectionPageType {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionPageFields<T> {
     #[serde(rename = "@context")]
-    context: AstreamContext,
+    context: CtxSigStream,
     id: URI,
     #[serde(rename = "type")]
     type_: CollectionPageType,
@@ -76,7 +76,7 @@ impl<T> CollectionPageFields<T> {
         next: Option<URI>,
     ) -> Self {
         CollectionPageFields {
-            context: AstreamContext::new(),
+            context: CtxSigStream::new(),
             type_,
             id,
             items,

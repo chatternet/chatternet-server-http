@@ -15,7 +15,7 @@ use crate::model::URI;
 use crate::proof::{build_proof, get_proof_did, ProofVerifier};
 
 use super::stringmax::StringMaxChars;
-use super::AstreamContext;
+use super::CtxSigStream;
 
 type ActorName = StringMaxChars<30>;
 
@@ -37,7 +37,7 @@ pub enum ActorType {
 #[serde(rename_all = "camelCase")]
 pub struct ActorNoProof {
     #[serde(rename = "@context")]
-    context: AstreamContext,
+    context: CtxSigStream,
     id: URI,
     #[serde(rename = "type")]
     type_: ActorType,
@@ -73,7 +73,7 @@ impl ActorFields {
         let following = URI::try_from(format!("{}/following", &actor_id))?;
         let followers = URI::try_from(format!("{}/followers", &actor_id))?;
         let actor = ActorNoProof {
-            context: AstreamContext::new(),
+            context: CtxSigStream::new(),
             id,
             type_,
             inbox,
@@ -131,7 +131,7 @@ impl ProofVerifier<ActorNoProof> for ActorFields {
 #[async_trait]
 pub trait Actor: ProofVerifier<ActorNoProof> {
     fn proof(&self) -> &Proof;
-    fn context(&self) -> &AstreamContext;
+    fn context(&self) -> &CtxSigStream;
     fn id(&self) -> &URI;
     fn type_(&self) -> ActorType;
     fn inbox(&self) -> &URI;
@@ -167,7 +167,7 @@ pub trait Actor: ProofVerifier<ActorNoProof> {
 }
 
 impl Actor for ActorFields {
-    fn context(&self) -> &AstreamContext {
+    fn context(&self) -> &CtxSigStream {
         &self.no_proof.context
     }
     fn id(&self) -> &URI {

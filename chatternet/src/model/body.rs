@@ -6,78 +6,68 @@ use crate::cid::{cid_from_json, uri_from_cid, CidVerifier};
 use crate::model::URI;
 use crate::new_context_loader;
 
-use super::AstreamContext;
+use super::stringmax::StringMaxBytes;
+use super::CtxSigStream;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-pub enum BodyType {
-    Article,
-    Audio,
-    Document,
-    Event,
-    Image,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum NoteType {
     Note,
-    Page,
-    Place,
-    Profile,
-    Relationship,
-    Tombstone,
-    Video,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct BodyNoId {
+pub struct Note1kNoId {
     #[serde(rename = "@context")]
-    context: AstreamContext,
+    context: CtxSigStream,
     #[serde(rename = "type")]
-    type_: BodyType,
-    content: Option<String>,
+    type_: NoteType,
+    content: StringMaxBytes<1024>,
     media_type: Option<String>,
     attributed_to: Option<URI>,
     in_reply_to: Option<URI>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BodyFields {
+pub struct Note1kFields {
     id: URI,
     #[serde(flatten)]
-    no_id: BodyNoId,
+    no_id: Note1kNoId,
 }
 
-impl BodyFields {
+impl Note1kFields {
     pub async fn new(
-        type_: BodyType,
-        content: Option<String>,
+        type_: NoteType,
+        content: String,
         media_type: Option<String>,
         attributed_to: Option<URI>,
         in_reply_to: Option<URI>,
     ) -> Result<Self> {
-        let object = BodyNoId {
-            context: AstreamContext::new(),
+        let object = Note1kNoId {
+            context: CtxSigStream::new(),
             type_,
-            content,
+            content: content.try_into()?,
             media_type,
             attributed_to,
             in_reply_to,
         };
         let id =
             uri_from_cid(cid_from_json(&object, &mut new_context_loader(), None).await?).unwrap();
-        Ok(BodyFields { id, no_id: object })
+        Ok(Note1kFields { id, no_id: object })
     }
 }
 
-impl CidVerifier<BodyNoId> for BodyFields {
-    fn extract_cid(&self) -> Result<(&URI, &BodyNoId)> {
+impl CidVerifier<Note1kNoId> for Note1kFields {
+    fn extract_cid(&self) -> Result<(&URI, &Note1kNoId)> {
         Ok((&self.id, &self.no_id))
     }
 }
 
 #[async_trait]
-pub trait Body: CidVerifier<BodyNoId> {
-    fn context(&self) -> &AstreamContext;
+pub trait Note1k: CidVerifier<Note1kNoId> {
+    fn context(&self) -> &CtxSigStream;
     fn id(&self) -> &URI;
-    fn type_(&self) -> BodyType;
-    fn content(&self) -> &Option<String>;
+    fn type_(&self) -> NoteType;
+    fn content(&self) -> &StringMaxBytes<1024>;
 
     async fn verify(&self) -> Result<()> {
         self.verify_cid().await?;
@@ -85,17 +75,17 @@ pub trait Body: CidVerifier<BodyNoId> {
     }
 }
 
-impl Body for BodyFields {
-    fn context(&self) -> &AstreamContext {
+impl Note1k for Note1kFields {
+    fn context(&self) -> &CtxSigStream {
         &self.no_id.context
     }
     fn id(&self) -> &URI {
         &self.id
     }
-    fn type_(&self) -> BodyType {
+    fn type_(&self) -> NoteType {
         self.no_id.type_
     }
-    fn content(&self) -> &Option<String> {
+    fn content(&self) -> &StringMaxBytes<1024> {
         &self.no_id.content
     }
 }
@@ -108,9 +98,9 @@ mod test {
 
     #[tokio::test]
     async fn builds_and_verifies_body() {
-        let body = BodyFields::new(
-            BodyType::Note,
-            Some("abc".to_string()),
+        let body = Note1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
             Some("text/html".to_string()),
             Some("did:example:a".to_string().try_into().unwrap()),
             Some("urn:cid:a".to_string().try_into().unwrap()),
@@ -121,15 +111,28 @@ mod test {
     }
 
     #[tokio::test]
+    async fn doesnt_build_content_too_long() {
+        Note1kFields::new(
+            NoteType::Note,
+            std::iter::repeat("a").take(1024 + 1).collect(),
+            Some("text/html".to_string()),
+            Some("did:example:a".to_string().try_into().unwrap()),
+            Some("urn:cid:a".to_string().try_into().unwrap()),
+        )
+        .await
+        .unwrap_err();
+    }
+
+    #[tokio::test]
     async fn doesnt_verify_modified_data() {
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None, None)
+        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
         body.verify().await.unwrap();
-        let body = BodyFields {
+        let body = Note1kFields {
             id: body.id,
-            no_id: BodyNoId {
-                content: Some("abcd".to_string()),
+            no_id: Note1kNoId {
+                content: "abcd".to_string().try_into().unwrap(),
                 ..body.no_id
             },
         };
