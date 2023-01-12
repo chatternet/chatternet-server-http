@@ -57,6 +57,33 @@ async fn handle_follow(
     Ok(())
 }
 
+async fn handle_unfollow(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    let actor_id = message.actor().as_str();
+    let objects_id: Vec<&str> = message
+        .object()
+        .as_vec()
+        .iter()
+        .map(|x| x.as_str())
+        .collect();
+    for object_id in objects_id {
+        db::delete_actor_following(&mut *connection, &actor_id, &object_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+        // also delete the audience form of this follow for quick lookup
+        db::delete_actor_audience(
+            &mut *connection,
+            &actor_id,
+            &format!("{}/followers", object_id),
+        )
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    }
+    Ok(())
+}
+
 async fn handle_delete(
     message: &MessageFields,
     connection: &mut SqliteConnection,
@@ -85,10 +112,18 @@ async fn handle_delete(
     if message_to_delete.actor() != message.actor() {
         Err(AppError::MessageNotValid)?
     }
+
+    // side effects of delete
+    match message_to_delete.type_() {
+        ActivityType::Follow => handle_unfollow(&message_to_delete, connection).await?,
+        _ => (),
+    }
+
     // delete the message document
     db::delete_document(&mut *connection, message_to_delete.id().as_str())
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
+
     // delete the message associations
     db::delete_message_audiences(&mut *connection, message_to_delete.id().as_str())
         .await
@@ -99,6 +134,7 @@ async fn handle_delete(
     db::delete_message(&mut *connection, message_to_delete.id().as_str())
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
+
     // delete the body documents if they are not associated to any other message
     for body_id in message_to_delete.object().as_vec() {
         if db::has_message_with_body(&mut *connection, body_id.as_str())
@@ -111,6 +147,7 @@ async fn handle_delete(
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
+
     Ok(())
 }
 
@@ -649,6 +686,77 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn deletes_follow_and_unfollows() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+
+        let message_1 = build_follow(
+            vec![
+                URI::from_str("tag:1").unwrap(),
+                URI::from_str("tag:2").unwrap(),
+            ],
+            &jwk,
+        )
+        .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let message_2 = build_follow(vec![URI::from_str("tag:3").unwrap()], &jwk).await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_2,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let message_delete = build_message_with_type(
+            &jwk,
+            ActivityType::Delete,
+            message_1.id().as_str(),
+            None,
+            None,
+            None,
+        )
+        .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/following", did),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let following: CollectionFields<String> = get_body(response).await;
+        assert_eq!(following.items(), &vec!["tag:3"]);
     }
 
     #[tokio::test]
