@@ -17,7 +17,7 @@ use crate::new_context_loader;
 use crate::proof::{build_proof, ProofVerifier};
 
 use super::vecmax::VecMax;
-use super::AstreamContext;
+use super::CtxSigStream;
 
 const MAX_URIS: usize = 256;
 
@@ -57,7 +57,7 @@ pub enum ActivityType {
 #[serde(rename_all = "camelCase")]
 pub struct MessageNoIdProof {
     #[serde(rename = "@context")]
-    context: AstreamContext,
+    context: CtxSigStream,
     #[serde(rename = "type")]
     type_: ActivityType,
     actor: URI,
@@ -97,7 +97,7 @@ impl MessageFields {
         let actor_id = URI::try_from(actor_id_from_did(&did)?)?;
         let published = now_ms();
         let message = MessageNoIdProof {
-            context: AstreamContext::new(),
+            context: CtxSigStream::new(),
             type_,
             actor: actor_id,
             object: VecMax::<_, MAX_URIS>::try_from(objects_id)?,
@@ -170,7 +170,7 @@ impl CidVerifier<MessageNoId> for MessageFields {
 pub trait Message: CidVerifier<MessageNoId> + ProofVerifier<MessageNoIdProof> {
     fn id(&self) -> &URI;
     fn proof(&self) -> &Proof;
-    fn context(&self) -> &AstreamContext;
+    fn context(&self) -> &CtxSigStream;
     fn type_(&self) -> ActivityType;
     fn actor(&self) -> &URI;
     fn object(&self) -> &VecMax<URI, MAX_URIS>;
@@ -193,7 +193,7 @@ impl Message for MessageFields {
     fn proof(&self) -> &Proof {
         &self.no_id.proof
     }
-    fn context(&self) -> &AstreamContext {
+    fn context(&self) -> &CtxSigStream {
         &self.no_id.no_proof.context
     }
     fn type_(&self) -> ActivityType {

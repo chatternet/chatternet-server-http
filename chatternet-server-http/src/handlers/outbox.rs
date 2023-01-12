@@ -252,8 +252,8 @@ mod test {
     use std::str::FromStr;
 
     use chatternet::model::{
-        Body, BodyFields, BodyType, Collection, CollectionFields, CollectionPage,
-        CollectionPageFields,
+        Collection, CollectionFields, CollectionPage, CollectionPageFields, Note1k, Note1kFields,
+        NoteType,
     };
     use tokio;
     use tower::ServiceExt;
@@ -424,7 +424,7 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None, None)
+        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
         let message = build_message(&jwk, body.id().as_str(), None, None, None).await;
@@ -518,7 +518,7 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = BodyFields::new(BodyType::Note, Some("abc".to_string()), None, None, None)
+        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
         let message_1 = build_message(&jwk, body.id().as_str(), None, None, None).await;
