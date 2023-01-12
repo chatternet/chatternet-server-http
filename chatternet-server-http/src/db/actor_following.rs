@@ -75,6 +75,22 @@ pub async fn delete_actor_following(
     Ok(())
 }
 
+pub async fn delete_actor_all_following(
+    connection: &mut SqliteConnection,
+    actor_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "\
+        DELETE FROM `ActorsFollowings` \
+        WHERE `actor_id` = $1;\
+        ",
+    )
+    .bind(actor_id)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_actor_followings(
     connection: &mut SqliteConnection,
     actor_id: &str,
@@ -174,7 +190,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn puts_and_deletes_actor_following() {
+    async fn deletes_actor_following() {
         let connector = Connector::new("sqlite::memory:").await.unwrap();
         let mut connection = connector.connection().await.unwrap();
         put_actor_following(&mut connection, "did:2/actor", "did:1/actor")
@@ -192,6 +208,25 @@ mod test {
                 .unwrap(),
             ["did:3/actor"]
         );
+    }
+
+    #[tokio::test]
+    async fn deletes_actor_all_following() {
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
+        put_actor_following(&mut connection, "did:2/actor", "did:1/actor")
+            .await
+            .unwrap();
+        put_actor_following(&mut connection, "did:2/actor", "did:3/actor")
+            .await
+            .unwrap();
+        delete_actor_all_following(&mut connection, "did:2/actor")
+            .await
+            .unwrap();
+        assert!(get_actor_followings(&mut connection, "did:2/actor")
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

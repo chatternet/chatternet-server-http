@@ -41,18 +41,28 @@ async fn handle_follow(
         .iter()
         .map(|x| x.as_str())
         .collect();
-    for object_id in objects_id {
-        db::put_actor_following(&mut *connection, &actor_id, &object_id)
+    if objects_id.is_empty() {
+        db::delete_actor_all_following(&mut *connection, &actor_id)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
         // also store the audience form of this follow for quick lookup
-        db::put_actor_audience(
-            &mut *connection,
-            &actor_id,
-            &format!("{}/followers", object_id),
-        )
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
+        db::delete_actor_all_audiences(&mut *connection, &actor_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    } else {
+        for object_id in objects_id {
+            db::put_actor_following(&mut *connection, &actor_id, &object_id)
+                .await
+                .map_err(|_| AppError::DbQueryFailed)?;
+            // also store the audience form of this follow for quick lookup
+            db::put_actor_audience(
+                &mut *connection,
+                &actor_id,
+                &format!("{}/followers", object_id),
+            )
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+        }
     }
     Ok(())
 }
@@ -757,6 +767,57 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let following: CollectionFields<String> = get_body(response).await;
         assert_eq!(following.items(), &vec!["tag:3"]);
+    }
+
+    #[tokio::test]
+    async fn follows_nothing_deletes_all() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+
+        let message_1 = build_follow(
+            vec![
+                URI::from_str("tag:1").unwrap(),
+                URI::from_str("tag:2").unwrap(),
+            ],
+            &jwk,
+        )
+        .await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let message_2 = build_follow(vec![], &jwk).await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_2,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/following", did),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let following: CollectionFields<String> = get_body(response).await;
+        assert!(following.items().is_empty());
     }
 
     #[tokio::test]
