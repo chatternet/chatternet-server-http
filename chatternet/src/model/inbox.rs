@@ -37,28 +37,20 @@ pub fn new_inbox(
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
     use tokio;
 
     use super::*;
     use crate::didkey::build_jwk;
-    use crate::model::{ActivityType, CollectionPage, Message};
+    use crate::model::{ActivityType, CollectionPage, Message, MessageBuilder};
 
     #[tokio::test]
     async fn builds_inbox() {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = MessageFields::new(
-            &jwk,
-            ActivityType::Create,
-            vec![URI::from_str("id:a").unwrap()],
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+        let message = MessageBuilder::new(&jwk, ActivityType::Create, vec!["id:a".to_string()])
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
         let message_id = message.id();
 
         let inbox = new_inbox("did:example:a", vec![message.clone()], 4, 0, Some(3)).unwrap();

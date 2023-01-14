@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::{actor_id_from_did, did_from_jwk};
-use chatternet::model::{ActivityType, Message, MessageFields, URI};
+use chatternet::model::{ActivityType, Message, MessageBuilder, MessageFields};
 use sqlx::{Connection, SqliteConnection};
 use ssi::jwk::JWK;
 
@@ -10,24 +10,12 @@ use super::error::AppError;
 use super::AppState;
 use crate::db::{self};
 
-pub fn build_audiences_id(message: &MessageFields) -> Result<Vec<String>> {
-    let tos_id: Option<Vec<String>> = message
-        .to()
-        .as_ref()
-        .map(|x| x.as_vec().iter().map(|x| x.to_string()).collect());
-    let ccs_id: Option<Vec<String>> = message
-        .cc()
-        .as_ref()
-        .map(|x| x.as_vec().iter().map(|x| x.to_string()).collect());
-    let audiences_id: Option<Vec<String>> = message
-        .audience()
-        .as_ref()
-        .map(|x| x.as_vec().iter().map(|x| x.to_string()).collect());
-    let chained = std::iter::empty::<String>()
-        .chain(tos_id.unwrap_or(Vec::new()).into_iter())
-        .chain(ccs_id.unwrap_or(Vec::new()).into_iter())
-        .chain(audiences_id.unwrap_or(Vec::new()).into_iter());
-    Ok(chained.collect())
+pub fn build_audiences_id(message: &MessageFields) -> Vec<String> {
+    if let Some(to) = message.to() {
+        to.as_vec().iter().map(|x| x.to_string()).collect()
+    } else {
+        vec![]
+    }
 }
 
 async fn handle_follow(
@@ -41,28 +29,18 @@ async fn handle_follow(
         .iter()
         .map(|x| x.as_str())
         .collect();
-    if objects_id.is_empty() {
-        db::delete_actor_all_following(&mut *connection, &actor_id)
+    for object_id in objects_id {
+        db::put_actor_following(&mut *connection, &actor_id, &object_id)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
         // also store the audience form of this follow for quick lookup
-        db::delete_actor_all_audiences(&mut *connection, &actor_id)
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
-    } else {
-        for object_id in objects_id {
-            db::put_actor_following(&mut *connection, &actor_id, &object_id)
-                .await
-                .map_err(|_| AppError::DbQueryFailed)?;
-            // also store the audience form of this follow for quick lookup
-            db::put_actor_audience(
-                &mut *connection,
-                &actor_id,
-                &format!("{}/followers", object_id),
-            )
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
-        }
+        db::put_actor_audience(
+            &mut *connection,
+            &actor_id,
+            &format!("{}/followers", object_id),
+        )
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
     }
     Ok(())
 }
@@ -82,7 +60,6 @@ async fn handle_unfollow(
         db::delete_actor_following(&mut *connection, &actor_id, &object_id)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
-        // also delete the audience form of this follow for quick lookup
         db::delete_actor_audience(
             &mut *connection,
             &actor_id,
@@ -91,6 +68,99 @@ async fn handle_unfollow(
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     }
+    Ok(())
+}
+
+async fn handle_add(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    let target = match message.target() {
+        Some(target) => target,
+        None => return Err(AppError::MessageNotValid),
+    };
+    if target.as_vec().len() != 1 {
+        return Err(AppError::MessageNotValid);
+    }
+    let target = match target.as_vec().first() {
+        Some(target) => target,
+        None => return Err(AppError::MessageNotValid),
+    };
+    if target.as_str() != format!("{}/following", message.actor().as_str()) {
+        return Err(AppError::MessageNotValid);
+    }
+    handle_follow(message, connection).await?;
+    Ok(())
+}
+
+async fn handle_remove(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    let target = match message.target() {
+        Some(target) => target,
+        None => return Err(AppError::MessageNotValid),
+    };
+    if target.as_vec().len() != 1 {
+        return Err(AppError::MessageNotValid);
+    }
+    let target = match target.as_vec().first() {
+        Some(target) => target,
+        None => return Err(AppError::MessageNotValid),
+    };
+    if target.as_str() != format!("{}/following", message.actor().as_str()) {
+        return Err(AppError::MessageNotValid);
+    }
+    handle_unfollow(message, connection).await?;
+    Ok(())
+}
+
+async fn clear_followings(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    db::delete_actor_all_following(&mut *connection, message.actor().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_actor_all_audiences(&mut *connection, &message.actor().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    return Ok(());
+}
+
+async fn delete_message(
+    message: &MessageFields,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    // delete the message document
+    db::delete_document(&mut *connection, message.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+
+    // delete the message associations
+    db::delete_message_audiences(&mut *connection, message.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_message_body(&mut *connection, message.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    db::delete_message(&mut *connection, message.id().as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+
+    // delete the body documents if they are not associated to any other message
+    for body_id in message.object().as_vec() {
+        if db::has_message_with_body(&mut *connection, body_id.as_str())
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?
+        {
+            continue;
+        }
+        db::delete_document(&mut *connection, body_id.as_str())
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    }
+
     Ok(())
 }
 
@@ -107,58 +177,30 @@ async fn handle_delete(
     if message.object().as_vec().len() != 1 {
         Err(AppError::MessageNotValid)?
     }
-    // the document to delete
-    let document = match db::get_document(&mut *connection, document_id.as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?
-    {
-        Some(object) => object,
-        None => return Ok(()),
-    };
-    // can delete only messages
-    let message_to_delete: MessageFields =
-        serde_json::from_str(&document).map_err(|_| AppError::MessageNotValid)?;
-    // only the creator of a message can delete that message
-    if message_to_delete.actor() != message.actor() {
-        Err(AppError::MessageNotValid)?
+
+    // object to delete is the followers collection
+    if document_id.as_str() == format!("{}/following", message.actor().as_str()) {
+        clear_followings(message, connection).await
     }
-
-    // side effects of delete
-    match message_to_delete.type_() {
-        ActivityType::Follow => handle_unfollow(&message_to_delete, connection).await?,
-        _ => (),
-    }
-
-    // delete the message document
-    db::delete_document(&mut *connection, message_to_delete.id().as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-
-    // delete the message associations
-    db::delete_message_audiences(&mut *connection, message_to_delete.id().as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-    db::delete_message_body(&mut *connection, message_to_delete.id().as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-    db::delete_message(&mut *connection, message_to_delete.id().as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-
-    // delete the body documents if they are not associated to any other message
-    for body_id in message_to_delete.object().as_vec() {
-        if db::has_message_with_body(&mut *connection, body_id.as_str())
+    // object to delete is a document
+    else {
+        // the document to delete
+        let document = match db::get_document(&mut *connection, document_id.as_str())
             .await
             .map_err(|_| AppError::DbQueryFailed)?
         {
-            continue;
+            Some(object) => object,
+            None => return Ok(()),
+        };
+        // can delete only messages
+        let message_to_delete: MessageFields =
+            serde_json::from_str(&document).map_err(|_| AppError::MessageNotValid)?;
+        // only the creator of a message can delete that message
+        if message_to_delete.actor() != message.actor() {
+            Err(AppError::MessageNotValid)?
         }
-        db::delete_document(&mut *connection, body_id.as_str())
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
+        delete_message(&message_to_delete, connection).await
     }
-
-    Ok(())
 }
 
 async fn store_message(
@@ -169,7 +211,7 @@ async fn store_message(
     let actor_id = message.actor().as_str();
 
     // store this message id for its audiences
-    let audiences_id = build_audiences_id(&message).map_err(|_| AppError::MessageNotValid)?;
+    let audiences_id = build_audiences_id(&message);
     for audience_id in &audiences_id {
         db::put_message_audience(&mut *connection, &message_id, &audience_id)
             .await
@@ -220,17 +262,22 @@ async fn handle_view(
     }
 
     let server_followers = format!("{}/followers", server_actor_id);
-    let view_message = MessageFields::new(
+    let view_message = MessageBuilder::new(
         &jwk,
         ActivityType::View,
-        message.object().as_vec().clone(),
-        None,
-        None,
-        Some(vec![
-            URI::try_from(server_followers).map_err(|_| AppError::ServerMisconfigured)?
-        ]),
-        Some(message.id().to_owned()),
+        message
+            .object()
+            .as_vec()
+            .iter()
+            .map(|x| x.as_str().to_string())
+            .collect(),
     )
+    .map_err(|_| AppError::ServerMisconfigured)?
+    .to(vec![server_followers])
+    .map_err(|_| AppError::ServerMisconfigured)?
+    .origin(vec![message.id().as_str().to_string()])
+    .map_err(|_| AppError::ServerMisconfigured)?
+    .build()
     .await
     .map_err(|_| AppError::ServerMisconfigured)?;
 
@@ -273,15 +320,17 @@ pub async fn handle_actor_outbox(
         return Ok(StatusCode::ACCEPTED);
     };
 
-    store_message(&message, &mut *connection).await?;
-
     // run type-dependent side effects
     match message.type_() {
         // activity expresses a follow relationship
-        ActivityType::Follow => handle_follow(&message, &mut *connection).await?,
         ActivityType::Delete => handle_delete(&message, &mut *connection).await?,
+        ActivityType::Add => handle_add(&message, &mut *connection).await?,
+        ActivityType::Remove => handle_remove(&message, &mut *connection).await?,
         _ => (),
     }
+
+    store_message(&message, &mut *connection).await?;
+
     if message.type_() != ActivityType::View {
         handle_view(&message, &mut *connection, &jwk).await?;
     }
@@ -296,8 +345,6 @@ pub async fn handle_actor_outbox(
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
     use chatternet::model::{
         Collection, CollectionFields, CollectionPage, CollectionPageFields, Note1k, Note1kFields,
         NoteType,
@@ -321,21 +368,10 @@ mod test {
                     "did:example:a".to_string(),
                     "did:example:b".to_string(),
                 ]),
-                Some(vec!["did:example:c".to_string()]),
-                Some(vec!["did:example:d".to_string()]),
             )
             .await,
-        )
-        .unwrap();
-        assert_eq!(
-            audiences_id,
-            [
-                "did:example:a",
-                "did:example:b",
-                "did:example:c",
-                "did:example:d"
-            ]
         );
+        assert_eq!(audiences_id, ["did:example:a", "did:example:b",]);
     }
 
     #[tokio::test]
@@ -344,7 +380,7 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let message = build_message(&jwk, "id:1", None, None, None).await;
+        let message = build_message(&jwk, "id:1", None).await;
 
         let response = api
             .clone()
@@ -390,7 +426,7 @@ mod test {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = build_message(&jwk, "id:1", None, None, None).await;
+        let message = build_message(&jwk, "id:1", None).await;
 
         let response = api
             .clone()
@@ -410,7 +446,7 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let message = build_message(&jwk, "id:1", None, None, None).await;
+        let message = build_message(&jwk, "id:1", None).await;
 
         let mut invalid = serde_json::to_value(&message).unwrap();
         *invalid.get_mut("id").unwrap() = serde_json::to_value("id:a").unwrap();
@@ -433,14 +469,7 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let message = build_follow(
-            vec![
-                URI::from_str("tag:1").unwrap(),
-                URI::from_str("tag:2").unwrap(),
-            ],
-            &jwk,
-        )
-        .await;
+        let message = build_follow(vec!["tag:1".to_string(), "tag:2".to_string()], &jwk).await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -474,16 +503,9 @@ mod test {
         let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
-        let message = build_message(&jwk, body.id().as_str(), None, None, None).await;
-        let message_delete = build_message_with_type(
-            &jwk,
-            ActivityType::Delete,
-            message.id().as_str(),
-            None,
-            None,
-            None,
-        )
-        .await;
+        let message = build_message(&jwk, body.id().as_str(), None).await;
+        let message_delete =
+            build_message_with_type(&jwk, ActivityType::Delete, message.id().as_str(), None).await;
 
         let response = api
             .clone()
@@ -568,17 +590,11 @@ mod test {
         let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
             .await
             .unwrap();
-        let message_1 = build_message(&jwk, body.id().as_str(), None, None, None).await;
-        let message_2 = build_message(&jwk, body.id().as_str(), None, None, None).await;
-        let message_delete = build_message_with_type(
-            &jwk,
-            ActivityType::Delete,
-            message_1.id().as_str(),
-            None,
-            None,
-            None,
-        )
-        .await;
+        let message_1 = build_message(&jwk, body.id().as_str(), None).await;
+        let message_2 = build_message(&jwk, body.id().as_str(), None).await;
+        let message_delete =
+            build_message_with_type(&jwk, ActivityType::Delete, message_1.id().as_str(), None)
+                .await;
 
         let response = api
             .clone()
@@ -651,19 +667,13 @@ mod test {
 
         let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
         let did_1 = did_from_jwk(&jwk_1).unwrap();
-        let message = build_message(&jwk_1, "id:1", None, None, None).await;
+        let message = build_message(&jwk_1, "id:1", None).await;
 
         let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
         let did_2 = did_from_jwk(&jwk_2).unwrap();
-        let message_delete = build_message_with_type(
-            &jwk_2,
-            ActivityType::Delete,
-            message.id().as_str(),
-            None,
-            None,
-            None,
-        )
-        .await;
+        let message_delete =
+            build_message_with_type(&jwk_2, ActivityType::Delete, message.id().as_str(), None)
+                .await;
 
         let response = api
             .clone()
@@ -699,20 +709,13 @@ mod test {
     }
 
     #[tokio::test]
-    async fn deletes_follow_and_unfollows() {
+    async fn removes_follow() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let message_1 = build_follow(
-            vec![
-                URI::from_str("tag:1").unwrap(),
-                URI::from_str("tag:2").unwrap(),
-            ],
-            &jwk,
-        )
-        .await;
+        let message_1 = build_follow(vec!["tag:1".to_string(), "tag:2".to_string()], &jwk).await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -724,7 +727,7 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let message_2 = build_follow(vec![URI::from_str("tag:3").unwrap()], &jwk).await;
+        let message_2 = build_follow(vec!["tag:3".to_string()], &jwk).await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -736,21 +739,20 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let message_delete = build_message_with_type(
-            &jwk,
-            ActivityType::Delete,
-            message_1.id().as_str(),
-            None,
-            None,
-            None,
-        )
-        .await;
+        let message_remove =
+            MessageBuilder::new(&jwk, ActivityType::Remove, vec!["tag:2".to_string()])
+                .unwrap()
+                .target(vec![format!("{}/actor/following", did)])
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor/outbox", did),
-                &message_delete,
+                &message_remove,
             ))
             .await
             .unwrap();
@@ -766,24 +768,17 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let following: CollectionFields<String> = get_body(response).await;
-        assert_eq!(following.items(), &vec!["tag:3"]);
+        assert_eq!(following.items(), &vec!["tag:1", "tag:3"]);
     }
 
     #[tokio::test]
-    async fn follows_nothing_deletes_all() {
+    async fn delete_following_clears_following() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let message_1 = build_follow(
-            vec![
-                URI::from_str("tag:1").unwrap(),
-                URI::from_str("tag:2").unwrap(),
-            ],
-            &jwk,
-        )
-        .await;
+        let message_1 = build_follow(vec!["tag:1".to_string(), "tag:2".to_string()], &jwk).await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -795,7 +790,13 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let message_2 = build_follow(vec![], &jwk).await;
+        let message_2 = build_message_with_type(
+            &jwk,
+            ActivityType::Delete,
+            &format!("{}/actor/following", did),
+            None,
+        )
+        .await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -838,11 +839,7 @@ mod test {
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor/outbox", did_server),
-                &build_follow(
-                    vec![URI::try_from(format!("{}/actor", did_1)).unwrap()],
-                    &jwk_server,
-                )
-                .await,
+                &build_follow(vec![format!("{}/actor", did_1)], &jwk_server).await,
             ))
             .await
             .unwrap();
@@ -858,8 +855,6 @@ mod test {
                     &jwk_1,
                     "id:1",
                     Some(vec![format!("{}/actor/followers", did_1)]),
-                    None,
-                    None,
                 )
                 .await,
             ))
@@ -886,11 +881,7 @@ mod test {
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor/outbox", did_2),
-                &build_follow(
-                    vec![URI::try_from(format!("{}/actor", did_server)).unwrap()],
-                    &jwk_2,
-                )
-                .await,
+                &build_follow(vec![format!("{}/actor", did_server)], &jwk_2).await,
             ))
             .await
             .unwrap();

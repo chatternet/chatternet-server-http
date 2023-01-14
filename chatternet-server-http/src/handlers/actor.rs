@@ -158,9 +158,7 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{
-        Actor, ActorFields, ActorType, CollectionPage, CollectionPageFields, URI,
-    };
+    use chatternet::model::{Actor, ActorFields, ActorType, CollectionPage, CollectionPageFields};
 
     use super::super::test_utils::*;
 
@@ -267,9 +265,9 @@ mod test {
                 &format!("/api/ap/{}/actor/outbox", did_1),
                 &build_follow(
                     vec![
-                        URI::try_from(format!("{}/actor", did_1)).unwrap(),
-                        URI::try_from(format!("{}/actor", did_2)).unwrap(),
-                        URI::try_from("did:key:za/actor".to_string()).unwrap(),
+                        format!("{}/actor", did_1),
+                        format!("{}/actor", did_2),
+                        "did:key:za/actor".to_string(),
                     ],
                     &jwk_1,
                 )
@@ -285,11 +283,7 @@ mod test {
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor/outbox", did_2),
-                &build_follow(
-                    vec![URI::try_from(format!("{}/actor", did_2)).unwrap()],
-                    &jwk_2,
-                )
-                .await,
+                &build_follow(vec![format!("{}/actor", did_2)], &jwk_2).await,
             ))
             .await
             .unwrap();
