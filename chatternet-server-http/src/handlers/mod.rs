@@ -64,7 +64,7 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                         .route("/:id/actor", get(handle_actor_get).post(handle_actor_post))
                         .route("/:id/actor/following", get(handle_actor_following))
                         .route("/:id/actor/followers", get(handle_actor_followers))
-                        .route("/:id/actor/outbox", post(handle_actor_outbox))
+                        .route("/:id/actor/outbox", post(handle_outbox))
                         .route("/:id/actor/inbox", get(handle_inbox))
                         .route("/:id", get(handle_document_get).post(handle_body_post)),
                 ),
@@ -87,14 +87,13 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
 #[cfg(test)]
 mod test_utils {
     use std::fmt::Debug;
-    use std::str::FromStr;
     use std::sync::Arc;
 
     use axum::body::Body;
     use axum::http::{self, Request, Response};
     use axum::routing::Router;
-    use chatternet::didkey::build_jwk;
-    use chatternet::model::{ActivityType, MessageFields, URI};
+    use chatternet::didkey::{build_jwk, did_from_jwk};
+    use chatternet::model::{ActivityType, MessageBuilder, MessageFields};
     use hyper;
     use hyper::body::HttpBody;
     use mime;
@@ -111,48 +110,34 @@ mod test_utils {
         activity_type: ActivityType,
         document_id: &str,
         to: Option<Vec<String>>,
-        cc: Option<Vec<String>>,
-        audience: Option<Vec<String>>,
     ) -> MessageFields {
-        let to = to.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
-        let cc = cc.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
-        let audience =
-            audience.map(|x| x.into_iter().map(|x| URI::try_from(x)).flatten().collect());
-        MessageFields::new(
-            &jwk,
-            activity_type,
-            vec![URI::from_str(document_id).unwrap()],
-            to,
-            cc,
-            audience,
-            None,
-        )
-        .await
-        .unwrap()
+        let builder =
+            MessageBuilder::new(&jwk, activity_type, vec![document_id.to_string()]).unwrap();
+        let builder = if let Some(to) = to {
+            builder.to(to).unwrap()
+        } else {
+            builder
+        };
+        builder.build().await.unwrap()
     }
 
     pub async fn build_message(
         jwk: &JWK,
         document_id: &str,
         to: Option<Vec<String>>,
-        cc: Option<Vec<String>>,
-        audience: Option<Vec<String>>,
     ) -> MessageFields {
-        build_message_with_type(jwk, ActivityType::Create, document_id, to, cc, audience).await
+        build_message_with_type(jwk, ActivityType::Create, document_id, to).await
     }
 
-    pub async fn build_follow(follows_id: Vec<URI>, jwk: &JWK) -> MessageFields {
-        MessageFields::new(
-            &jwk,
-            ActivityType::Follow,
-            follows_id,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await
-        .unwrap()
+    pub async fn build_follow(follows_id: Vec<String>, jwk: &JWK) -> MessageFields {
+        let did = did_from_jwk(jwk).unwrap();
+        MessageBuilder::new(&jwk, ActivityType::Add, follows_id)
+            .unwrap()
+            .target(vec![format!("{}/actor/following", did)])
+            .unwrap()
+            .build()
+            .await
+            .unwrap()
     }
 
     pub async fn get_body<T, U>(response: Response<T>) -> U

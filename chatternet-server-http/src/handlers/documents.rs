@@ -147,7 +147,7 @@ mod test {
             .await
             .unwrap();
         let body_id = body.id().as_str();
-        let message = build_message(&jwk, body_id, None, None, None).await;
+        let message = build_message(&jwk, body_id, None).await;
 
         // post a message so that the server knows about the body
         let response = api
@@ -192,7 +192,7 @@ mod test {
             .await
             .unwrap();
         let body_id = body.id().as_str();
-        let message = build_message(&jwk, body_id, None, None, None).await;
+        let message = build_message(&jwk, body_id, None).await;
 
         let response = api
             .clone()

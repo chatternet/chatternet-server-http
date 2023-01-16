@@ -50,7 +50,7 @@ pub async fn handle_inbox(
 mod test {
     use axum::http::StatusCode;
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{CollectionPage, Message, URI};
+    use chatternet::model::{CollectionPage, Message};
     use tokio;
     use tower::ServiceExt;
 
@@ -68,14 +68,7 @@ mod test {
         let did_2 = did_from_jwk(&jwk_2).unwrap();
 
         // did_1 will see because follows self and this is addressed to self
-        let message = build_message(
-            &jwk_1,
-            "id:1",
-            Some(vec![format!("{}/actor", did_1)]),
-            None,
-            None,
-        )
-        .await;
+        let message = build_message(&jwk_1, "id:1", Some(vec![format!("{}/actor", did_1)])).await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -88,14 +81,7 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
 
         // did_1 won't see because follows did_2 but not addressed to an audience with did_1
-        let message = build_message(
-            &jwk_1,
-            "id:2",
-            Some(vec![format!("{}/actor", did_2)]),
-            None,
-            None,
-        )
-        .await;
+        let message = build_message(&jwk_1, "id:2", Some(vec![format!("{}/actor", did_2)])).await;
         let response = api
             .clone()
             .oneshot(request_json(
@@ -112,8 +98,6 @@ mod test {
             &jwk_1,
             "id:3",
             Some(vec![format!("{}/actor/followers", did_2)]),
-            None,
-            None,
         )
         .await;
         let response = api
@@ -158,11 +142,7 @@ mod test {
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}/actor/outbox", did_1),
-                &build_follow(
-                    vec![URI::try_from(format!("{}/actor", did_2)).unwrap()],
-                    &jwk_1,
-                )
-                .await,
+                &build_follow(vec![format!("{}/actor", did_2)], &jwk_1).await,
             ))
             .await
             .unwrap();

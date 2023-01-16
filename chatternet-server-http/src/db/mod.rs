@@ -13,6 +13,7 @@ mod documents;
 mod message;
 mod message_audience;
 mod message_body;
+mod mutable_modified;
 
 pub use actor_audience::*;
 pub use actor_following::*;
@@ -20,6 +21,7 @@ pub use documents::*;
 pub use message::*;
 pub use message_audience::*;
 pub use message_body::*;
+pub use mutable_modified::*;
 
 fn joint_id(ids: &[&str]) -> String {
     // IDs are generic, one ID could contain many IDs, so need to use a
@@ -162,6 +164,7 @@ impl Connector {
         create_actors_audiences(&mut *connection).await?;
         create_actor_following(&mut *connection).await?;
         create_documents(&mut *connection).await?;
+        create_mutable_modified(&mut *connection).await?;
 
         let pool_read = if url == "sqlite::memory:" {
             None

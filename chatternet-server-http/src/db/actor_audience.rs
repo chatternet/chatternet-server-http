@@ -57,6 +57,39 @@ pub async fn put_actor_audience(
     Ok(())
 }
 
+pub async fn delete_actor_audience(
+    connection: &mut SqliteConnection,
+    actor_id: &str,
+    audience_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "\
+        DELETE FROM `ActorsAudiences` \
+        WHERE `joint_id` = $1;\
+        ",
+    )
+    .bind(joint_id(&[actor_id, audience_id]))
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_actor_all_audiences(
+    connection: &mut SqliteConnection,
+    actor_id: &str,
+) -> Result<()> {
+    sqlx::query(
+        "\
+        DELETE FROM `ActorsAudiences` \
+        WHERE `actor_id` = $1;\
+        ",
+    )
+    .bind(actor_id)
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
+}
+
 pub async fn get_actor_audiences(
     connection: &mut SqliteConnection,
     actor_id: &str,
@@ -109,5 +142,45 @@ mod test {
                 .unwrap(),
             ["tag:1/followers"]
         );
+    }
+
+    #[tokio::test]
+    async fn deletes_actor_audiences() {
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
+        put_actor_audience(&mut connection, "did:1/actor", "did:2/actor/followers")
+            .await
+            .unwrap();
+        put_actor_audience(&mut connection, "did:1/actor", "tag:1/followers")
+            .await
+            .unwrap();
+        delete_actor_audience(&mut connection, "did:1/actor", "did:2/actor/followers")
+            .await
+            .unwrap();
+        assert_eq!(
+            get_actor_audiences(&mut connection, "did:1/actor")
+                .await
+                .unwrap(),
+            ["tag:1/followers"]
+        );
+    }
+
+    #[tokio::test]
+    async fn deletes_actor_all_audiences() {
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
+        put_actor_audience(&mut connection, "did:1/actor", "did:2/actor/followers")
+            .await
+            .unwrap();
+        put_actor_audience(&mut connection, "did:1/actor", "tag:1/followers")
+            .await
+            .unwrap();
+        delete_actor_all_audiences(&mut connection, "did:1/actor")
+            .await
+            .unwrap();
+        assert!(get_actor_audiences(&mut connection, "did:1/actor")
+            .await
+            .unwrap()
+            .is_empty());
     }
 }
