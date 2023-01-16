@@ -2,13 +2,14 @@ use axum::http::{header, Method};
 use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
+use sqlx::SqliteConnection;
 use ssi::jwk::JWK;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
-use crate::db::Connector;
+use crate::db::{self, Connector};
 
 mod actor;
 mod documents;
@@ -20,6 +21,8 @@ use actor::*;
 use documents::*;
 use inbox::*;
 use outbox::*;
+
+use self::error::AppError;
 
 #[derive(Serialize)]
 pub struct ErrorMessage {
@@ -82,6 +85,25 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                 ]),
         )
         .with_state(state)
+}
+
+async fn use_mutable(
+    id: &str,
+    timestamp_millis: i64,
+    connection: &mut SqliteConnection,
+) -> Result<(), AppError> {
+    if db::get_mutable_modified(&mut *connection, id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+        .map_or(false, |x| x > timestamp_millis)
+    {
+        Err(AppError::StaleMessage)?;
+    } else {
+        db::put_mutable_modified(&mut *connection, id, timestamp_millis)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -204,6 +226,7 @@ mod test {
     use tower::ServiceExt;
 
     use super::test_utils::*;
+    use super::*;
 
     #[tokio::test]
     async fn api_handles_version() {
@@ -222,5 +245,14 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let body: String = get_body(response).await;
         assert_eq!(body, VERSION);
+    }
+
+    #[tokio::test]
+    async fn use_mutable_fails_if_modified() {
+        let mut connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection_mut().await.unwrap();
+        use_mutable("id", 1, &mut *connection).await.unwrap();
+        use_mutable("id", 2, &mut *connection).await.unwrap();
+        use_mutable("id", 0, &mut *connection).await.unwrap_err();
     }
 }

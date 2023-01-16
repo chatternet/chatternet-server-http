@@ -1,11 +1,12 @@
 use anyhow::{Error, Result};
 use async_trait::async_trait;
+use chrono::prelude::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{self, Value};
 use ssi::did::VerificationRelationship as ProofPurpose;
 use ssi::jsonld::{json_to_dataset, ContextLoader};
 use ssi::jwk::JWK;
-use ssi::ldp::LinkedDataDocument;
+use ssi::ldp::{now_ms, LinkedDataDocument};
 use ssi::ldp::{Error as LdpError, Proof};
 use ssi::rdf::DataSet;
 use std::str::FromStr;
@@ -41,10 +42,7 @@ pub struct ActorNoProof {
     id: URI,
     #[serde(rename = "type")]
     type_: ActorType,
-    inbox: URI,
-    outbox: URI,
-    following: URI,
-    followers: URI,
+    published: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<ActorName>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -68,18 +66,12 @@ impl ActorFields {
         let did = did_from_jwk(jwk)?;
         let actor_id = actor_id_from_did(&did)?;
         let id = URI::from_str(&actor_id)?;
-        let inbox = URI::try_from(format!("{}/inbox", &actor_id))?;
-        let outbox = URI::try_from(format!("{}/outbox", &actor_id))?;
-        let following = URI::try_from(format!("{}/following", &actor_id))?;
-        let followers = URI::try_from(format!("{}/followers", &actor_id))?;
+        let published = now_ms();
         let actor = ActorNoProof {
             context: CtxSigStream::new(),
             id,
             type_,
-            inbox,
-            outbox,
-            following,
-            followers,
+            published,
             name: name.map(ActorName::try_from).transpose()?,
             url: url.map(URI::try_from).transpose()?,
         };
@@ -134,10 +126,7 @@ pub trait Actor: ProofVerifier<ActorNoProof> {
     fn context(&self) -> &CtxSigStream;
     fn id(&self) -> &URI;
     fn type_(&self) -> ActorType;
-    fn inbox(&self) -> &URI;
-    fn outbox(&self) -> &URI;
-    fn following(&self) -> &URI;
-    fn followers(&self) -> &URI;
+    fn published(&self) -> &DateTime<Utc>;
     fn name(&self) -> &Option<ActorName>;
     fn url(&self) -> &Option<URI>;
 
@@ -148,18 +137,6 @@ pub trait Actor: ProofVerifier<ActorNoProof> {
             get_proof_did(&self.proof()).ok_or(Error::msg("actor proof doesn't match DID"))?;
         if &did != proof_did {
             Err(Error::msg("actor proof doesn't match DID"))?;
-        }
-        if self.inbox().as_str() != format!("{}/inbox", &actor_id) {
-            Err(Error::msg("actor inbox URI is incorrect"))?;
-        }
-        if self.outbox().as_str() != format!("{}/outbox", &actor_id) {
-            Err(Error::msg("actor outbox URI is incorrect"))?;
-        }
-        if self.following().as_str() != format!("{}/following", &actor_id) {
-            Err(Error::msg("actor following URI is incorrect"))?;
-        }
-        if self.followers().as_str() != format!("{}/followers", &actor_id) {
-            Err(Error::msg("actor followers URI is incorrect"))?;
         }
         self.verify_proof().await?;
         Ok(())
@@ -176,17 +153,8 @@ impl Actor for ActorFields {
     fn type_(&self) -> ActorType {
         self.no_proof.type_
     }
-    fn inbox(&self) -> &URI {
-        &self.no_proof.inbox
-    }
-    fn outbox(&self) -> &URI {
-        &self.no_proof.outbox
-    }
-    fn following(&self) -> &URI {
-        &&self.no_proof.following
-    }
-    fn followers(&self) -> &URI {
-        &self.no_proof.followers
+    fn published(&self) -> &DateTime<Utc> {
+        &self.no_proof.published
     }
     fn name(&self) -> &Option<ActorName> {
         &self.no_proof.name
@@ -244,29 +212,6 @@ mod test {
         )
         .await
         .unwrap_err();
-    }
-
-    #[tokio::test]
-    async fn doesnt_verify_invalid_uris() {
-        let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let actor = ActorFields::new(&jwk, ActorType::Person, None, None)
-            .await
-            .unwrap();
-        let mut invalid = actor.clone();
-        invalid.no_proof.id = URI::from_str("a:b").unwrap();
-        invalid.verify().await.unwrap_err();
-        let mut invalid = actor.clone();
-        invalid.no_proof.inbox = URI::from_str("a:b").unwrap();
-        invalid.verify().await.unwrap_err();
-        let mut invalid = actor.clone();
-        invalid.no_proof.outbox = URI::from_str("a:b").unwrap();
-        invalid.verify().await.unwrap_err();
-        let mut invalid = actor.clone();
-        invalid.no_proof.following = URI::from_str("a:b").unwrap();
-        invalid.verify().await.unwrap_err();
-        let mut invalid = actor.clone();
-        invalid.no_proof.followers = URI::from_str("a:b").unwrap();
-        invalid.verify().await.unwrap_err();
     }
 
     #[tokio::test]

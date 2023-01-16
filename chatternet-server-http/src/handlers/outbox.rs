@@ -7,7 +7,7 @@ use sqlx::{Connection, SqliteConnection};
 use ssi::jwk::JWK;
 
 use super::error::AppError;
-use super::AppState;
+use super::{use_mutable, AppState};
 use crate::db::{self};
 
 pub fn build_audiences_id(message: &MessageFields) -> Vec<String> {
@@ -89,21 +89,12 @@ async fn handle_add(
     if target.as_str() != format!("{}/following", message.actor().as_str()) {
         return Err(AppError::MessageNotValid);
     }
-    if db::get_mutable_modified(&mut *connection, target.as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?
-        .map_or(false, |x| x > message.published().timestamp_millis())
-    {
-        Err(AppError::StaleMessage)?;
-    } else {
-        db::put_mutable_modified(
-            &mut *connection,
-            target.as_str(),
-            message.published().timestamp_millis(),
-        )
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-    }
+    use_mutable(
+        target.as_str(),
+        message.published().timestamp_millis(),
+        &mut *connection,
+    )
+    .await?;
     handle_follow(message, connection).await?;
     Ok(())
 }
@@ -126,21 +117,12 @@ async fn handle_remove(
     if target.as_str() != format!("{}/following", message.actor().as_str()) {
         return Err(AppError::MessageNotValid);
     }
-    if db::get_mutable_modified(&mut *connection, target.as_str())
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?
-        .map_or(false, |x| x > message.published().timestamp_millis())
-    {
-        Err(AppError::StaleMessage)?;
-    } else {
-        db::put_mutable_modified(
-            &mut *connection,
-            target.as_str(),
-            message.published().timestamp_millis(),
-        )
-        .await
-        .map_err(|_| AppError::DbQueryFailed)?;
-    }
+    use_mutable(
+        target.as_str(),
+        message.published().timestamp_millis(),
+        &mut *connection,
+    )
+    .await?;
     handle_unfollow(message, connection).await?;
     Ok(())
 }
@@ -210,21 +192,12 @@ async fn handle_delete(
 
     // object to delete is the followers collection
     if document_id.as_str() == format!("{}/following", message.actor().as_str()) {
-        if db::get_mutable_modified(&mut *connection, document_id.as_str())
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?
-            .map_or(false, |x| x > message.published().timestamp_millis())
-        {
-            Err(AppError::StaleMessage)?;
-        } else {
-            db::put_mutable_modified(
-                &mut *connection,
-                document_id.as_str(),
-                message.published().timestamp_millis(),
-            )
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?;
-        }
+        use_mutable(
+            document_id.as_str(),
+            message.published().timestamp_millis(),
+            &mut *connection,
+        )
+        .await?;
         clear_followings(message, connection).await
     }
     // object to delete is a document
