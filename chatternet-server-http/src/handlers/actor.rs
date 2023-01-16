@@ -9,7 +9,7 @@ use chatternet::model::{
 use tap::Pipe;
 
 use super::error::AppError;
-use super::{AppState, CollectionPageQuery};
+use super::{use_mutable, AppState, CollectionPageQuery};
 use crate::db::{self};
 
 /// Get the Actor document with `did` using a DB connection obtained from
@@ -52,6 +52,12 @@ pub async fn handle_actor_post(
     if actor.id().as_str() != actor_id {
         Err(AppError::ActorIdWrong)?;
     }
+    use_mutable(
+        &actor_id,
+        actor.published().timestamp_millis(),
+        &mut *connection,
+    )
+    .await?;
     if !actor.verify().await.is_ok() {
         Err(AppError::ActorNotValid)?;
     }
@@ -234,6 +240,58 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wont_update_stale_actor() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+
+        let actor_1 = ActorFields::new(&jwk, ActorType::Person, Some("abc".to_string()), None)
+            .await
+            .unwrap();
+        let actor_2 = loop {
+            let actor = ActorFields::new(&jwk, ActorType::Person, Some("abcd".to_string()), None)
+                .await
+                .unwrap();
+            if actor.published() > actor_1.published() {
+                break actor;
+            };
+        };
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor", did),
+                &actor_2,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor", did),
+                &actor_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty("GET", &format!("/api/ap/{}/actor", did)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let actor_back: Option<ActorFields> = get_body(response).await;
+        let actor_back = actor_back.unwrap();
+        assert_eq!(actor_back.name().as_ref().unwrap().as_str(), "abcd");
     }
 
     #[tokio::test]
