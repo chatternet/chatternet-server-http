@@ -14,6 +14,7 @@ pub enum AppError {
     DocumentIdWrong,
     MessageNotValid,
     ServerMisconfigured,
+    StaleMessage,
 }
 
 impl IntoResponse for AppError {
@@ -32,9 +33,12 @@ impl IntoResponse for AppError {
             Self::DocumentNotValid => (StatusCode::BAD_REQUEST, "document is not valid"),
             Self::DocumentIdWrong => (StatusCode::BAD_REQUEST, "document ID is wrong"),
             Self::MessageNotValid => (StatusCode::BAD_REQUEST, "message is not valid"),
-            Self::ServerMisconfigured => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "server configuration invalid for query",
+            Self::ServerMisconfigured => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "server is misconfigured")
+            }
+            Self::StaleMessage => (
+                StatusCode::CONFLICT,
+                "a newer timestamp is known for this object",
             ),
         }
         .into_response()

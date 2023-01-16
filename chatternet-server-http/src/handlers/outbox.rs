@@ -89,6 +89,21 @@ async fn handle_add(
     if target.as_str() != format!("{}/following", message.actor().as_str()) {
         return Err(AppError::MessageNotValid);
     }
+    if db::get_mutable_modified(&mut *connection, target.as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+        .map_or(false, |x| x > message.published().timestamp_millis())
+    {
+        Err(AppError::StaleMessage)?;
+    } else {
+        db::put_mutable_modified(
+            &mut *connection,
+            target.as_str(),
+            message.published().timestamp_millis(),
+        )
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
+    }
     handle_follow(message, connection).await?;
     Ok(())
 }
@@ -110,6 +125,21 @@ async fn handle_remove(
     };
     if target.as_str() != format!("{}/following", message.actor().as_str()) {
         return Err(AppError::MessageNotValid);
+    }
+    if db::get_mutable_modified(&mut *connection, target.as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+        .map_or(false, |x| x > message.published().timestamp_millis())
+    {
+        Err(AppError::StaleMessage)?;
+    } else {
+        db::put_mutable_modified(
+            &mut *connection,
+            target.as_str(),
+            message.published().timestamp_millis(),
+        )
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?;
     }
     handle_unfollow(message, connection).await?;
     Ok(())
@@ -180,6 +210,21 @@ async fn handle_delete(
 
     // object to delete is the followers collection
     if document_id.as_str() == format!("{}/following", message.actor().as_str()) {
+        if db::get_mutable_modified(&mut *connection, document_id.as_str())
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?
+            .map_or(false, |x| x > message.published().timestamp_millis())
+        {
+            Err(AppError::StaleMessage)?;
+        } else {
+            db::put_mutable_modified(
+                &mut *connection,
+                document_id.as_str(),
+                message.published().timestamp_millis(),
+            )
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+        }
         clear_followings(message, connection).await
     }
     // object to delete is a document
@@ -286,7 +331,7 @@ async fn handle_view(
     Ok(())
 }
 
-pub async fn handle_actor_outbox(
+pub async fn handle_outbox(
     State(AppState { connector, jwk }): State<AppState>,
     Path(did): Path<String>,
     Json(message): Json<MessageFields>,
@@ -463,7 +508,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn handles_follow_get_following() {
+    async fn handles_follow_gets_following() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
@@ -492,6 +537,125 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let following: CollectionFields<String> = get_body(response).await;
         assert_eq!(following.items(), &vec!["tag:1", "tag:2"]);
+    }
+
+    #[tokio::test]
+    async fn removes_follow() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+
+        let message_1 = build_follow(vec!["tag:1".to_string(), "tag:2".to_string()], &jwk).await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let message_remove =
+            MessageBuilder::new(&jwk, ActivityType::Remove, vec!["tag:2".to_string()])
+                .unwrap()
+                .target(vec![format!("{}/actor/following", did)])
+                .unwrap()
+                .build()
+                .await
+                .unwrap();
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_remove,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/following", did),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let following: CollectionFields<String> = get_body(response).await;
+        assert_eq!(following.items(), &vec!["tag:1"]);
+    }
+
+    #[tokio::test]
+    async fn doesnt_add_stale_following() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+
+        let message_1 = build_follow(vec!["tag:1".to_string()], &jwk).await;
+        let message_2 = MessageBuilder::new(&jwk, ActivityType::Remove, vec!["tag:1".to_string()])
+            .unwrap()
+            .target(vec![format!("{}/actor/following", did)])
+            .unwrap()
+            .build()
+            .await
+            .unwrap();
+        let message_3 = loop {
+            let message = build_follow(vec!["tag:1".to_string()], &jwk).await;
+            if message.published() > message_2.published() {
+                break message;
+            };
+        };
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_3,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_2,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/actor/following", did),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let following: CollectionFields<String> = get_body(response).await;
+        assert_eq!(following.items(), &vec!["tag:1"]);
     }
 
     #[tokio::test]
@@ -709,69 +873,6 @@ mod test {
     }
 
     #[tokio::test]
-    async fn removes_follow() {
-        let api = build_test_api().await;
-
-        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
-        let did = did_from_jwk(&jwk).unwrap();
-
-        let message_1 = build_follow(vec!["tag:1".to_string(), "tag:2".to_string()], &jwk).await;
-        let response = api
-            .clone()
-            .oneshot(request_json(
-                "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
-                &message_1,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let message_2 = build_follow(vec!["tag:3".to_string()], &jwk).await;
-        let response = api
-            .clone()
-            .oneshot(request_json(
-                "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
-                &message_2,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let message_remove =
-            MessageBuilder::new(&jwk, ActivityType::Remove, vec!["tag:2".to_string()])
-                .unwrap()
-                .target(vec![format!("{}/actor/following", did)])
-                .unwrap()
-                .build()
-                .await
-                .unwrap();
-        let response = api
-            .clone()
-            .oneshot(request_json(
-                "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
-                &message_remove,
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let response = api
-            .clone()
-            .oneshot(request_empty(
-                "GET",
-                &format!("/api/ap/{}/actor/following", did),
-            ))
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let following: CollectionFields<String> = get_body(response).await;
-        assert_eq!(following.items(), &vec!["tag:1", "tag:3"]);
-    }
-
-    #[tokio::test]
     async fn delete_following_clears_following() {
         let api = build_test_api().await;
 
@@ -819,6 +920,50 @@ mod test {
         assert_eq!(response.status(), StatusCode::OK);
         let following: CollectionFields<String> = get_body(response).await;
         assert!(following.items().is_empty());
+    }
+
+    #[tokio::test]
+    async fn doesnt_delete_stale_following() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+
+        let message_1 = build_message_with_type(
+            &jwk,
+            ActivityType::Delete,
+            &format!("{}/actor/following", did),
+            None,
+        )
+        .await;
+        let message_2 = loop {
+            let message = build_follow(vec!["tag:1".to_string()], &jwk).await;
+            if message.published() > message_1.published() {
+                break message;
+            };
+        };
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_2,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message_1,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
