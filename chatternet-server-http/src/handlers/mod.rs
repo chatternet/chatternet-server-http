@@ -69,6 +69,7 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                         .route("/:id/actor/followers", get(handle_actor_followers))
                         .route("/:id/actor/outbox", post(handle_outbox))
                         .route("/:id/actor/inbox", get(handle_inbox))
+                        .route("/:id/actor/inbox/from/:id2/actor", get(handle_inbox_from))
                         .route("/:id", get(handle_document_get).post(handle_body_post)),
                 ),
         )
