@@ -8,6 +8,7 @@ use axum::http::StatusCode;
 use did_method_key::DIDKey;
 use serde_json::Value;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
+use tap::Pipe;
 
 use super::error::AppError;
 use super::AppState;
@@ -41,14 +42,14 @@ pub async fn handle_document_get(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
 
-    let document = db::get_document(&mut connection, &id).await;
-    if let Ok(Some(document)) = document {
-        let document: Value =
-            serde_json::from_str(&document).map_err(|_| AppError::DocumentNotValid)?;
-        return Ok(Json(document));
-    }
-
-    Err(AppError::DocumentNotKnown)?
+    db::get_document(&mut connection, &id)
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+        .map(|x| serde_json::from_str::<Value>(&x).map_err(|_| AppError::DocumentNotValid))
+        .transpose()?
+        .ok_or(AppError::DocumentNotKnown)?
+        .pipe(Json)
+        .pipe(Ok)
 }
 
 /// Handle a post request for a message body `body` with ID `id`.
@@ -83,6 +84,37 @@ pub async fn handle_body_post(
     Ok(StatusCode::OK)
 }
 
+/// Handle a get request for a the create message for document with ID `id`.
+///
+/// Returns the last create message by the actor with `did`.
+pub async fn handle_document_get_create(
+    State(AppState { connector, .. }): State<AppState>,
+    Path((id, did)): Path<(String, String)>,
+) -> Result<Json<Value>, AppError> {
+    let connector = connector.read().await;
+    let mut connection = connector
+        .connection()
+        .await
+        .map_err(|_| AppError::DbConnectionFailed)?;
+    let actor_id = format!("{}/actor", did);
+    let message_id = db::get_body_messages(&mut connection, &id, Some(&actor_id))
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+        .pipe(|x| x.into_iter().last());
+    if let Some(message_id) = message_id {
+        db::get_document(&mut connection, &message_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?
+            .map(|x| serde_json::from_str::<Value>(&x).map_err(|_| AppError::DocumentNotValid))
+            .transpose()?
+            .ok_or(AppError::DocumentNotKnown)?
+            .pipe(Json)
+            .pipe(Ok)
+    } else {
+        Err(AppError::DocumentNotKnown)?
+    }
+}
+
 #[cfg(test)]
 mod test {
     use axum::body::Body as HttpBody;
@@ -92,7 +124,7 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{NoteMd1k, NoteMd1kFields, NoteType};
+    use chatternet::model::{Message, MessageFields, NoteMd1k, NoteMd1kFields, NoteType};
 
     use super::super::test_utils::*;
 
@@ -184,6 +216,58 @@ mod test {
         let body_back: Option<NoteMd1kFields> = get_body(response).await;
         let body_back = body_back.unwrap();
         assert_eq!(body_back.id(), body.id());
+    }
+
+    #[tokio::test]
+    async fn body_gets_message_from_creator() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+        let actor_id = format!("{}/actor", did);
+
+        let body = NoteMd1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
+            actor_id.clone().try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let body_id = body.id().as_str();
+        let message = build_message(&jwk, body_id, None).await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json("POST", &format!("/api/ap/{}", body_id), &body))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // server returns the message fo the body
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/ap/{}/createdBy/{}", body_id, actor_id),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let message_back: Option<MessageFields> = get_body(response).await;
+        let message_back = message_back.unwrap();
+        assert_eq!(message_back.id(), message.id());
     }
 
     #[tokio::test]
