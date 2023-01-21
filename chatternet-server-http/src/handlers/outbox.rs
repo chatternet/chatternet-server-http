@@ -243,8 +243,13 @@ async fn store_message(
         .iter()
         .map(|x| x.as_str())
         .collect();
+    let created_by = if message.type_() == ActivityType::Create {
+        Some(message.actor().as_str())
+    } else {
+        None
+    };
     for object_id in objects_id {
-        db::put_message_body(&mut *connection, &message_id, object_id)
+        db::put_message_body(&mut *connection, &message_id, object_id, created_by)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
@@ -364,8 +369,8 @@ pub async fn handle_outbox(
 #[cfg(test)]
 mod test {
     use chatternet::model::{
-        Collection, CollectionFields, CollectionPage, CollectionPageFields, Note1k, Note1kFields,
-        NoteType,
+        Collection, CollectionFields, CollectionPage, CollectionPageFields, NoteMd1k,
+        NoteMd1kFields, NoteType,
     };
     use tokio;
     use tower::ServiceExt;
@@ -637,9 +642,14 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
-            .await
-            .unwrap();
+        let body = NoteMd1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
+            "did:example:a".to_string().try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let message = build_message(&jwk, body.id().as_str(), None).await;
         let message_delete =
             build_message_with_type(&jwk, ActivityType::Delete, message.id().as_str(), None).await;
@@ -724,9 +734,14 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
-            .await
-            .unwrap();
+        let body = NoteMd1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
+            "did:example:a".to_string().try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let message_1 = build_message(&jwk, body.id().as_str(), None).await;
         let message_2 = build_message(&jwk, body.id().as_str(), None).await;
         let message_delete =
