@@ -12,7 +12,7 @@ use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
 use super::error::AppError;
 use super::AppState;
 use crate::db::{self};
-use chatternet::model::{Note1k, Note1kFields};
+use chatternet::model::{NoteMd1k, NoteMd1kFields};
 
 /// Handle a get request for a document with ID `id`.
 ///
@@ -55,7 +55,7 @@ pub async fn handle_document_get(
 pub async fn handle_body_post(
     State(AppState { connector, .. }): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<Note1kFields>,
+    Json(body): Json<NoteMd1kFields>,
 ) -> Result<StatusCode, AppError> {
     let mut connector = connector.write().await;
     let mut connection = connector
@@ -92,7 +92,7 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{Note1k, Note1kFields, NoteType};
+    use chatternet::model::{NoteMd1k, NoteMd1kFields, NoteType};
 
     use super::super::test_utils::*;
 
@@ -143,9 +143,14 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
-            .await
-            .unwrap();
+        let body = NoteMd1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
+            "did:example:a".to_string().try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let body_id = body.id().as_str();
         let message = build_message(&jwk, body_id, None).await;
 
@@ -176,7 +181,7 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body_back: Option<Note1kFields> = get_body(response).await;
+        let body_back: Option<NoteMd1kFields> = get_body(response).await;
         let body_back = body_back.unwrap();
         assert_eq!(body_back.id(), body.id());
     }
@@ -188,9 +193,14 @@ mod test {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
-            .await
-            .unwrap();
+        let body = NoteMd1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
+            "did:example:a".to_string().try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
         let body_id = body.id().as_str();
         let message = build_message(&jwk, body_id, None).await;
 
@@ -249,16 +259,21 @@ mod test {
     #[tokio::test]
     async fn wont_post_unknown() {
         let api = build_test_api().await;
-        let document = Note1kFields::new(NoteType::Note, "abc".to_string(), None, None, None)
-            .await
-            .unwrap();
-        let document_id = document.id().as_str();
+        let body = NoteMd1kFields::new(
+            NoteType::Note,
+            "abc".to_string(),
+            "did:example:a".to_string().try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let document_id = body.id().as_str();
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}", document_id),
-                &document,
+                &body,
             ))
             .await
             .unwrap();
