@@ -243,8 +243,13 @@ async fn store_message(
         .iter()
         .map(|x| x.as_str())
         .collect();
+    let created_by = if message.type_() == ActivityType::Create {
+        Some(message.actor().as_str())
+    } else {
+        None
+    };
     for object_id in objects_id {
-        db::put_message_body(&mut *connection, &message_id, object_id)
+        db::put_message_body(&mut *connection, &message_id, object_id, created_by)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
