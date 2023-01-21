@@ -4,7 +4,8 @@ use anyhow::Result;
 use futures::TryStreamExt;
 use sha2::{Digest, Sha256};
 use sqlx::pool::PoolConnection;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::query::Query;
+use sqlx::sqlite::{SqliteArguments, SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 mod actor_audience;
@@ -39,6 +40,31 @@ pub struct CollectionPageOut {
     pub items: Vec<String>,
     pub low_idx: u64,
     pub high_idx: u64,
+}
+
+async fn build_inbox_messages<'a>(
+    query: Query<'a, Sqlite, SqliteArguments<'a>>,
+    connection: &mut SqliteConnection,
+) -> Result<Option<CollectionPageOut>> {
+    let mut messages = Vec::new();
+    let mut rows = query.fetch(&mut *connection);
+    let mut first_idx: Option<u64> = None;
+    let mut last_idx: Option<u64> = None;
+    while let Some(row) = rows.try_next().await? {
+        let message: &str = row.try_get("document")?;
+        let idx: u32 = row.try_get("idx")?;
+        messages.push(message.to_string());
+        first_idx = first_idx.map(|x| x.min(idx as u64)).or(Some(idx as u64));
+        last_idx = last_idx.map(|x| x.max(idx as u64)).or(Some(idx as u64));
+    }
+    Ok(match (first_idx, last_idx) {
+        (Some(first_idx), Some(last_idx)) => Some(CollectionPageOut {
+            items: messages,
+            low_idx: first_idx,
+            high_idx: last_idx,
+        }),
+        _ => None,
+    })
 }
 
 pub async fn get_inbox_for_actor(
@@ -88,25 +114,55 @@ pub async fn get_inbox_for_actor(
             .bind(actor_id)
             .bind(i64::try_from(count)?),
     };
-    let mut messages = Vec::new();
-    let mut rows = query.fetch(&mut *connection);
-    let mut first_idx: Option<u64> = None;
-    let mut last_idx: Option<u64> = None;
-    while let Some(row) = rows.try_next().await? {
-        let message: &str = row.try_get("document")?;
-        let idx: u32 = row.try_get("idx")?;
-        messages.push(message.to_string());
-        first_idx = first_idx.map(|x| x.min(idx as u64)).or(Some(idx as u64));
-        last_idx = last_idx.map(|x| x.max(idx as u64)).or(Some(idx as u64));
-    }
-    Ok(match (first_idx, last_idx) {
-        (Some(first_idx), Some(last_idx)) => Some(CollectionPageOut {
-            items: messages,
-            low_idx: first_idx,
-            high_idx: last_idx,
-        }),
-        _ => None,
-    })
+    build_inbox_messages(query, connection).await
+}
+
+pub async fn get_inbox_from_actor(
+    connection: &mut SqliteConnection,
+    for_actor_id: &str,
+    from_actor_id: &str,
+    count: u64,
+    start_idx: Option<u64>,
+) -> Result<Option<CollectionPageOut>> {
+    let query_str = format!(
+        "\
+        SELECT `idx`, `document` FROM `Documents` \
+        INNER JOIN `Messages` \
+        ON `Documents`.`document_id` = `Messages`.`message_id` \
+        WHERE `Messages`.`actor_id` = $2 \
+        AND `Messages`.`message_id` IN (\
+            SELECT `message_id` FROM `MessagesAudiences` \
+            WHERE `MessagesAudiences`.`audience_id` = $1
+            OR `MessagesAudiences`.`audience_id` = $2 || '/followers' \
+            OR `MessagesAudiences`.`audience_id` IN (\
+                SELECT `audience_id` FROM `ActorsAudiences` \
+                WHERE `ActorsAudiences`.`actor_id` = $1
+            )\
+        ) \
+        {} \
+        ORDER BY `idx` DESC \
+        LIMIT $3;\
+        ",
+        if start_idx.is_some() {
+            "\
+            AND `idx` <= $4 \
+            "
+        } else {
+            ""
+        }
+    );
+    let query = match start_idx {
+        Some(start_idx) => sqlx::query(&query_str)
+            .bind(for_actor_id)
+            .bind(from_actor_id)
+            .bind(i64::try_from(count)?)
+            .bind(u32::try_from(start_idx)?),
+        None => sqlx::query(&query_str)
+            .bind(for_actor_id)
+            .bind(from_actor_id)
+            .bind(i64::try_from(count)?),
+    };
+    build_inbox_messages(query, connection).await
 }
 
 pub async fn inbox_contains_message(
@@ -345,5 +401,53 @@ mod test {
         assert_eq!(out.items, ["message 2", "message 1"]);
         assert_eq!(out.low_idx, 1);
         assert_eq!(out.high_idx, 2);
+    }
+
+    #[tokio::test]
+    async fn db_gets_inbox_from_actor() {
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
+
+        put_document(&mut connection, "id:1", "message 1")
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:1", "did:1/actor")
+            .await
+            .unwrap();
+        put_message_audience(&mut connection, "id:1", "did:1/actor/followers")
+            .await
+            .unwrap();
+
+        put_document(&mut connection, "id:2", "message 2")
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:2", "did:1/actor")
+            .await
+            .unwrap();
+        put_message_audience(&mut connection, "id:2", "tag:1/followers")
+            .await
+            .unwrap();
+
+        let out = get_inbox_from_actor(&mut connection, "did:2/actor", "did:1/actor", 3, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.items, ["message 1"]);
+
+        put_actor_audience(&mut connection, "did:2/actor", "tag:1/followers")
+            .await
+            .unwrap();
+
+        let out = get_inbox_from_actor(&mut connection, "did:2/actor", "did:1/actor", 3, None)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.items, ["message 2", "message 1"]);
+
+        let out = get_inbox_from_actor(&mut connection, "did:2/actor", "did:1/actor", 3, Some(1))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(out.items, ["message 1"]);
     }
 }
