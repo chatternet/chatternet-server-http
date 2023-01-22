@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Error, Result};
 use chatternet::didkey::{actor_id_from_did, did_from_jwk};
-use chatternet::model::URI;
+use chatternet::model::Uri;
 use clap::{Parser, Subcommand};
 use serde_json;
 use tokio;
@@ -21,8 +21,8 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    Follow { actor_id: URI },
-    ListFollows { actor_id: URI },
+    Follow { actor_id: Uri },
+    ListFollows { actor_id: Uri },
     ListServerFollows,
 }
 

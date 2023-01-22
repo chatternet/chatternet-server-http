@@ -13,7 +13,7 @@ mod actor_following;
 mod documents;
 mod message;
 mod message_audience;
-mod message_body;
+mod message_document;
 mod mutable_modified;
 
 pub use actor_audience::*;
@@ -21,7 +21,7 @@ pub use actor_following::*;
 pub use documents::*;
 pub use message::*;
 pub use message_audience::*;
-pub use message_body::*;
+pub use message_document::*;
 pub use mutable_modified::*;
 
 fn joint_id(ids: &[&str]) -> String {
@@ -216,7 +216,7 @@ impl Connector {
         let mut connection = pool_write.acquire().await?;
         create_messages(&mut *connection).await?;
         create_messages_audiences(&mut *connection).await?;
-        create_messages_bodies(&mut *connection).await?;
+        create_message_documents(&mut *connection).await?;
         create_actors_audiences(&mut *connection).await?;
         create_actor_following(&mut *connection).await?;
         create_documents(&mut *connection).await?;

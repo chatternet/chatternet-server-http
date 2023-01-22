@@ -153,22 +153,22 @@ async fn delete_message(
     db::delete_message_audiences(&mut *connection, message.id().as_str())
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
-    db::delete_message_body(&mut *connection, message.id().as_str())
+    db::delete_message_documents(&mut *connection, message.id().as_str())
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     db::delete_message(&mut *connection, message.id().as_str())
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
 
-    // delete the body documents if they are not associated to any other message
-    for body_id in message.object().as_vec() {
-        if db::has_message_with_body(&mut *connection, body_id.as_str())
+    // delete the document documents if they are not associated to any other message
+    for document_id in message.object().as_vec() {
+        if db::has_message_with_document(&mut *connection, document_id.as_str())
             .await
             .map_err(|_| AppError::DbQueryFailed)?
         {
             continue;
         }
-        db::delete_document(&mut *connection, body_id.as_str())
+        db::delete_document(&mut *connection, document_id.as_str())
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
@@ -236,20 +236,41 @@ async fn store_message(
             .map_err(|_| AppError::DbQueryFailed)?;
     }
 
-    // associate this message with its objects so they can be stored later
+    // associate actor document with this message
+    db::put_message_document(
+        &mut *connection,
+        &message_id,
+        message.actor().as_str(),
+        None,
+    )
+    .await
+    .map_err(|_| AppError::DbQueryFailed)?;
+    // associate object documents with this message
     let objects_id: Vec<&str> = message
         .object()
         .as_vec()
         .iter()
         .map(|x| x.as_str())
         .collect();
+    // also associate actor that created the object document
     let created_by = if message.type_() == ActivityType::Create {
         Some(message.actor().as_str())
     } else {
         None
     };
-    for object_id in objects_id {
-        db::put_message_body(&mut *connection, &message_id, object_id, created_by)
+    for document_id in objects_id {
+        db::put_message_document(&mut *connection, &message_id, document_id, created_by)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+    }
+    // associate audience tags with this message
+    for audience_id in &audiences_id {
+        let tag_id = if let Some(tag_id) = audience_id.strip_suffix("/followers") {
+            tag_id
+        } else {
+            audience_id
+        };
+        db::put_message_document(&mut *connection, &message_id, tag_id, None)
             .await
             .map_err(|_| AppError::DbQueryFailed)?;
     }
@@ -369,8 +390,8 @@ pub async fn handle_outbox(
 #[cfg(test)]
 mod test {
     use chatternet::model::{
-        Collection, CollectionFields, CollectionPage, CollectionPageFields, NoteMd1k,
-        NoteMd1kFields, NoteType,
+        Collection, CollectionFields, CollectionPage, CollectionPageFields, Document,
+        NoteMd1kFields,
     };
     use tokio;
     use tower::ServiceExt;
@@ -642,15 +663,14 @@ mod test {
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = NoteMd1kFields::new(
-            NoteType::Note,
+        let document = NoteMd1kFields::new(
             "abc".to_string(),
             "did:example:a".to_string().try_into().unwrap(),
             None,
         )
         .await
         .unwrap();
-        let message = build_message(&jwk, body.id().as_str(), None).await;
+        let message = build_message(&jwk, document.id().as_str(), None).await;
         let message_delete =
             build_message_with_type(&jwk, ActivityType::Delete, message.id().as_str(), None).await;
 
@@ -669,8 +689,8 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", body.id().as_str()),
-                &body,
+                &format!("/api/ap/{}", document.id().as_str()),
+                &document,
             ))
             .await
             .unwrap();
@@ -690,7 +710,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &body.id().as_str()),
+                &format!("/api/ap/{}", &document.id().as_str()),
             ))
             .await
             .unwrap();
@@ -721,7 +741,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &body.id().as_str()),
+                &format!("/api/ap/{}", &document.id().as_str()),
             ))
             .await
             .unwrap();
@@ -729,21 +749,20 @@ mod test {
     }
 
     #[tokio::test]
-    async fn deletes_message_and_keeps_shared_body() {
+    async fn deletes_message_and_keeps_shared_document() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
-        let body = NoteMd1kFields::new(
-            NoteType::Note,
+        let document = NoteMd1kFields::new(
             "abc".to_string(),
             "did:example:a".to_string().try_into().unwrap(),
             None,
         )
         .await
         .unwrap();
-        let message_1 = build_message(&jwk, body.id().as_str(), None).await;
-        let message_2 = build_message(&jwk, body.id().as_str(), None).await;
+        let message_1 = build_message(&jwk, document.id().as_str(), None).await;
+        let message_2 = build_message(&jwk, document.id().as_str(), None).await;
         let message_delete =
             build_message_with_type(&jwk, ActivityType::Delete, message_1.id().as_str(), None)
                 .await;
@@ -774,8 +793,8 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", body.id().as_str()),
-                &body,
+                &format!("/api/ap/{}", document.id().as_str()),
+                &document,
             ))
             .await
             .unwrap();
@@ -806,7 +825,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &body.id().as_str()),
+                &format!("/api/ap/{}", &document.id().as_str()),
             ))
             .await
             .unwrap();

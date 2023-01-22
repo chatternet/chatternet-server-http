@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tap::Pipe;
 
-use super::{CollectionPageFields, CollectionPageType, MessageFields, URI};
+use super::{CollectionPageFields, CollectionPageType, MessageFields, Uri};
 
 pub fn new_inbox(
     actor_id: &str,
@@ -10,19 +10,19 @@ pub fn new_inbox(
     start_idx: u64,
     end_idx: Option<u64>,
 ) -> Result<CollectionPageFields<MessageFields>> {
-    let collection_id = format!("{}/inbox", actor_id).pipe(URI::try_from)?;
+    let collection_id = format!("{}/inbox", actor_id).pipe(Uri::try_from)?;
     let id = format!(
         "{}/inbox?startIdx={}&pageSize={}",
         actor_id, start_idx, page_size
     )
-    .pipe(URI::try_from)?;
+    .pipe(Uri::try_from)?;
     let next = match end_idx {
         Some(end_idx) => Some(
             format!(
                 "{}/inbox?startIdx={}&pageSize={}",
                 actor_id, end_idx, page_size
             )
-            .pipe(URI::try_from)?,
+            .pipe(Uri::try_from)?,
         ),
         None => None,
     };

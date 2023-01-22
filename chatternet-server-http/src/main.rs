@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Error, Result};
 use axum;
 use chatternet::didkey::did_from_actor_id;
-use chatternet::model::{Actor, ActorFields};
+use chatternet::model::{Actor, ActorFields, Document};
 use clap::Parser;
 use serde_json;
 use tokio;
@@ -30,7 +30,7 @@ struct ParsedUrl {
     prefix: String,
 }
 
-fn parse_actor_url(actor: &impl Actor) -> Result<ParsedUrl> {
+fn parse_actor_url(actor: &(impl Actor + Document)) -> Result<ParsedUrl> {
     let actor_id = actor.id().as_str();
     let slash_actor_id = format!("/{}", actor_id);
     let actor_url = actor

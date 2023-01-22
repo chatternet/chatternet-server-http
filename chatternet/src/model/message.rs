@@ -12,7 +12,7 @@ use ssi::rdf::DataSet;
 
 use crate::cid::{cid_from_json, uri_from_cid, CidVerifier};
 use crate::didkey::{actor_id_from_did, did_from_actor_id, did_from_jwk};
-use crate::model::URI;
+use crate::model::Uri;
 use crate::new_context_loader;
 use crate::proof::{build_proof, ProofVerifier};
 
@@ -37,12 +37,12 @@ pub struct MessageNoIdProof {
     context: CtxSigStream,
     #[serde(rename = "type")]
     type_: ActivityType,
-    actor: URI,
-    object: VecMax<URI, MAX_URIS>,
+    actor: Uri,
+    object: VecMax<Uri, MAX_URIS>,
     published: DateTime<Utc>,
-    to: Option<VecMax<URI, MAX_URIS>>,
-    origin: Option<VecMax<URI, MAX_URIS>>,
-    target: Option<VecMax<URI, MAX_URIS>>,
+    to: Option<VecMax<Uri, MAX_URIS>>,
+    origin: Option<VecMax<Uri, MAX_URIS>>,
+    target: Option<VecMax<Uri, MAX_URIS>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -54,7 +54,7 @@ pub struct MessageNoId {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct MessageFields {
-    id: URI,
+    id: Uri,
     #[serde(flatten)]
     no_id: MessageNoId,
 }
@@ -62,18 +62,18 @@ pub struct MessageFields {
 pub struct MessageBuilder<'a> {
     jwk: &'a JWK,
     type_: ActivityType,
-    object: VecMax<URI, MAX_URIS>,
-    to: Option<VecMax<URI, MAX_URIS>>,
-    origin: Option<VecMax<URI, MAX_URIS>>,
-    target: Option<VecMax<URI, MAX_URIS>>,
+    object: VecMax<Uri, MAX_URIS>,
+    to: Option<VecMax<Uri, MAX_URIS>>,
+    origin: Option<VecMax<Uri, MAX_URIS>>,
+    target: Option<VecMax<Uri, MAX_URIS>>,
 }
 
 impl<'a> MessageBuilder<'a> {
     pub fn new(jwk: &'a JWK, type_: ActivityType, object_ids: Vec<String>) -> Result<Self> {
-        let object: VecMax<URI, MAX_URIS> = object_ids
+        let object: VecMax<Uri, MAX_URIS> = object_ids
             .into_iter()
-            .map(|id| URI::try_from(id).unwrap())
-            .collect::<Vec<URI>>()
+            .map(|id| Uri::try_from(id).unwrap())
+            .collect::<Vec<Uri>>()
             .try_into()?;
         Ok(Self {
             jwk,
@@ -86,30 +86,30 @@ impl<'a> MessageBuilder<'a> {
     }
 
     pub fn to(mut self, to: Vec<String>) -> Result<Self> {
-        let to: VecMax<URI, MAX_URIS> = to
+        let to: VecMax<Uri, MAX_URIS> = to
             .into_iter()
-            .map(|id| URI::try_from(id).unwrap())
-            .collect::<Vec<URI>>()
+            .map(|id| Uri::try_from(id).unwrap())
+            .collect::<Vec<Uri>>()
             .try_into()?;
         self.to = Some(to);
         Ok(self)
     }
 
     pub fn origin(mut self, origin: Vec<String>) -> Result<Self> {
-        let origin: VecMax<URI, MAX_URIS> = origin
+        let origin: VecMax<Uri, MAX_URIS> = origin
             .into_iter()
-            .map(|id| URI::try_from(id).unwrap())
-            .collect::<Vec<URI>>()
+            .map(|id| Uri::try_from(id).unwrap())
+            .collect::<Vec<Uri>>()
             .try_into()?;
         self.origin = Some(origin);
         Ok(self)
     }
 
     pub fn target(mut self, target: Vec<String>) -> Result<Self> {
-        let target: VecMax<URI, MAX_URIS> = target
+        let target: VecMax<Uri, MAX_URIS> = target
             .into_iter()
-            .map(|id| URI::try_from(id).unwrap())
-            .collect::<Vec<URI>>()
+            .map(|id| Uri::try_from(id).unwrap())
+            .collect::<Vec<Uri>>()
             .try_into()?;
         self.target = Some(target);
         Ok(self)
@@ -132,13 +132,13 @@ impl MessageFields {
     pub async fn new(
         jwk: &JWK,
         type_: ActivityType,
-        object: VecMax<URI, MAX_URIS>,
-        to: Option<VecMax<URI, MAX_URIS>>,
-        origin: Option<VecMax<URI, MAX_URIS>>,
-        target: Option<VecMax<URI, MAX_URIS>>,
+        object: VecMax<Uri, MAX_URIS>,
+        to: Option<VecMax<Uri, MAX_URIS>>,
+        origin: Option<VecMax<Uri, MAX_URIS>>,
+        target: Option<VecMax<Uri, MAX_URIS>>,
     ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
-        let actor_id = URI::try_from(actor_id_from_did(&did)?)?;
+        let actor_id = Uri::try_from(actor_id_from_did(&did)?)?;
         let published = now_ms();
         let message = MessageNoIdProof {
             context: CtxSigStream::new(),
@@ -204,23 +204,23 @@ impl ProofVerifier<MessageNoIdProof> for MessageFields {
 }
 
 impl CidVerifier<MessageNoId> for MessageFields {
-    fn extract_cid(&self) -> Result<(&URI, &MessageNoId)> {
+    fn extract_cid(&self) -> Result<(&Uri, &MessageNoId)> {
         Ok((&self.id, &self.no_id))
     }
 }
 
 #[async_trait]
 pub trait Message: CidVerifier<MessageNoId> + ProofVerifier<MessageNoIdProof> {
-    fn id(&self) -> &URI;
+    fn id(&self) -> &Uri;
     fn proof(&self) -> &Proof;
     fn context(&self) -> &CtxSigStream;
     fn type_(&self) -> ActivityType;
-    fn actor(&self) -> &URI;
-    fn object(&self) -> &VecMax<URI, MAX_URIS>;
+    fn actor(&self) -> &Uri;
+    fn object(&self) -> &VecMax<Uri, MAX_URIS>;
     fn published(&self) -> &DateTime<Utc>;
-    fn to(&self) -> &Option<VecMax<URI, MAX_URIS>>;
-    fn origin(&self) -> &Option<VecMax<URI, MAX_URIS>>;
-    fn target(&self) -> &Option<VecMax<URI, MAX_URIS>>;
+    fn to(&self) -> &Option<VecMax<Uri, MAX_URIS>>;
+    fn origin(&self) -> &Option<VecMax<Uri, MAX_URIS>>;
+    fn target(&self) -> &Option<VecMax<Uri, MAX_URIS>>;
 
     async fn verify(&self) -> Result<()> {
         self.verify_cid().await?;
@@ -230,7 +230,7 @@ pub trait Message: CidVerifier<MessageNoId> + ProofVerifier<MessageNoIdProof> {
 }
 
 impl Message for MessageFields {
-    fn id(&self) -> &URI {
+    fn id(&self) -> &Uri {
         &self.id
     }
     fn proof(&self) -> &Proof {
@@ -242,22 +242,22 @@ impl Message for MessageFields {
     fn type_(&self) -> ActivityType {
         self.no_id.no_proof.type_
     }
-    fn actor(&self) -> &URI {
+    fn actor(&self) -> &Uri {
         &self.no_id.no_proof.actor
     }
-    fn object(&self) -> &VecMax<URI, MAX_URIS> {
+    fn object(&self) -> &VecMax<Uri, MAX_URIS> {
         &self.no_id.no_proof.object
     }
     fn published(&self) -> &DateTime<Utc> {
         &self.no_id.no_proof.published
     }
-    fn to(&self) -> &Option<VecMax<URI, MAX_URIS>> {
+    fn to(&self) -> &Option<VecMax<Uri, MAX_URIS>> {
         &self.no_id.no_proof.to
     }
-    fn origin(&self) -> &Option<VecMax<URI, MAX_URIS>> {
+    fn origin(&self) -> &Option<VecMax<Uri, MAX_URIS>> {
         &self.no_id.no_proof.origin
     }
-    fn target(&self) -> &Option<VecMax<URI, MAX_URIS>> {
+    fn target(&self) -> &Option<VecMax<Uri, MAX_URIS>> {
         &self.no_id.no_proof.target
     }
 }

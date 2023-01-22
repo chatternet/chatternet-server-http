@@ -3,8 +3,10 @@
 //! Documents include messages and bodies. Actors are handled separately.
 
 use anyhow::Result;
+use async_trait::async_trait;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
+use chatternet::didkey::is_valid_did;
 use did_method_key::DIDKey;
 use serde_json::Value;
 use ssi::did_resolve::{DIDResolver, ResolutionInputMetadata};
@@ -13,7 +15,36 @@ use tap::Pipe;
 use super::error::AppError;
 use super::AppState;
 use crate::db::{self};
-use chatternet::model::{NoteMd1k, NoteMd1kFields};
+use chatternet::model::{Document, NoteMd1kFields, Tag30Fields, Uri};
+
+use serde::{Deserialize, Serialize};
+
+/// The document types with CID identifiers handled by the server.
+///
+/// Must list from most specific to most generic as serde will try to
+/// deserialize into each type in order since the variants are untagged.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ServerCidDocument {
+    Tag30(Tag30Fields),
+    NoteMd1k(NoteMd1kFields),
+}
+
+#[async_trait]
+impl Document for ServerCidDocument {
+    fn id(&self) -> &Uri {
+        match self {
+            ServerCidDocument::Tag30(x) => x.id(),
+            ServerCidDocument::NoteMd1k(x) => x.id(),
+        }
+    }
+    async fn verify(&self) -> Result<()> {
+        match self {
+            ServerCidDocument::Tag30(x) => x.verify().await,
+            ServerCidDocument::NoteMd1k(x) => x.verify().await,
+        }
+    }
+}
 
 /// Handle a get request for a document with ID `id`.
 ///
@@ -23,9 +54,8 @@ pub async fn handle_document_get(
     State(AppState { connector, .. }): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, AppError> {
-    // if this is just a DID, generate its corresponding DID document
-    // note that IDs with the `/actor` suffix is handled in a different route
-    if id.starts_with("did:key:") {
+    // if this is DID, generate its corresponding DID document
+    if is_valid_did(id.as_str()) {
         let (_, document, _) = DIDKey
             .resolve(&id, &ResolutionInputMetadata::default())
             .await;
@@ -52,33 +82,38 @@ pub async fn handle_document_get(
         .pipe(Ok)
 }
 
-/// Handle a post request for a message body `body` with ID `id`.
-pub async fn handle_body_post(
+/// Handle a post request for a message `document` with ID `id`.
+pub async fn handle_document_post(
     State(AppState { connector, .. }): State<AppState>,
     Path(id): Path<String>,
-    Json(body): Json<NoteMd1kFields>,
+    Json(document): Json<ServerCidDocument>,
 ) -> Result<StatusCode, AppError> {
     let mut connector = connector.write().await;
     let mut connection = connector
         .connection_mut()
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
-    if body.id().as_str() != id {
+    // this handler handles only CID documents only
+    if !id.starts_with("urn:cid:") {
         Err(AppError::DocumentIdWrong)?;
     }
-    // only accept body if a known (signed) message is associated with it
-    if !db::has_message_with_body(&mut *connection, &id)
+    if document.id().as_str() != id {
+        Err(AppError::DocumentIdWrong)?;
+    }
+    // only accept document if a known (signed) message is associated with it
+    if !db::has_message_with_document(&mut *connection, &id)
         .await
         .map_err(|_| AppError::DbQueryFailed)?
     {
         Err(AppError::DocumentNotKnown)?;
     }
-    // validate the body CID
-    if !body.verify().await.is_ok() {
+    if !document.verify().await.is_ok() {
         Err(AppError::DocumentNotValid)?;
     }
-    let body = serde_json::to_string(&body).map_err(|_| AppError::DocumentNotValid)?;
-    db::put_document(&mut *connection, &id, &body)
+    let document = serde_json::to_string(&document).map_err(|_| AppError::DocumentNotValid)?;
+    // this handler handles only CID documents whose content cannot change
+    // (since it is encoded in the ID), so there is no need to update
+    db::put_document_if_new(&mut *connection, &id, &document)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     Ok(StatusCode::OK)
@@ -97,7 +132,7 @@ pub async fn handle_document_get_create(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
     let actor_id = format!("{}/actor", did);
-    let message_id = db::get_body_messages(&mut connection, &id, Some(&actor_id))
+    let message_id = db::get_document_messages(&mut connection, &id, Some(&actor_id))
         .await
         .map_err(|_| AppError::DbQueryFailed)?
         .pipe(|x| x.into_iter().last());
@@ -124,7 +159,7 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{Message, MessageFields, NoteMd1k, NoteMd1kFields, NoteType};
+    use chatternet::model::{Document, Message, MessageFields, NoteMd1kFields, Tag30Fields};
 
     use super::super::test_utils::*;
 
@@ -169,24 +204,27 @@ mod test {
     }
 
     #[tokio::test]
-    async fn body_updates_and_gets() {
+    async fn document_updates_and_gets() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = NoteMd1kFields::new(
-            NoteType::Note,
+        let object = NoteMd1kFields::new(
             "abc".to_string(),
             "did:example:a".to_string().try_into().unwrap(),
             None,
         )
         .await
         .unwrap();
-        let body_id = body.id().as_str();
-        let message = build_message(&jwk, body_id, None).await;
+        let object_id = object.id().as_str();
 
-        // post a message so that the server knows about the body
+        let tag = Tag30Fields::new("abc".to_string()).await.unwrap();
+        let tag_id = tag.id().as_str();
+
+        let message = build_message(&jwk, object_id, Some(vec![tag_id.to_string()])).await;
+
+        // post a message so that the server knows about the document
         let response = api
             .clone()
             .oneshot(request_json(
@@ -198,44 +236,66 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // now possible to post the body on the server
+        // now possible to post the object on the server
         let response = api
             .clone()
-            .oneshot(request_json("POST", &format!("/api/ap/{}", body_id), &body))
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}", object_id),
+                &object,
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // server returns the body
+        // server returns the object
         let response = api
             .clone()
-            .oneshot(request_empty("GET", &format!("/api/ap/{}", body_id)))
+            .oneshot(request_empty("GET", &format!("/api/ap/{}", object_id)))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let body_back: Option<NoteMd1kFields> = get_body(response).await;
-        let body_back = body_back.unwrap();
-        assert_eq!(body_back.id(), body.id());
+        let object_back: Option<NoteMd1kFields> = get_body(response).await;
+        let object_back = object_back.unwrap();
+        assert_eq!(object_back.id(), object.id());
+
+        // now possible to post the tag on the server
+        let response = api
+            .clone()
+            .oneshot(request_json("POST", &format!("/api/ap/{}", tag_id), &tag))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // server returns the tag
+        let response = api
+            .clone()
+            .oneshot(request_empty("GET", &format!("/api/ap/{}", tag_id)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let tag_back: Option<Tag30Fields> = get_body(response).await;
+        let tag_back = tag_back.unwrap();
+        assert_eq!(tag_back.id(), tag.id());
     }
 
     #[tokio::test]
-    async fn body_gets_message_from_creator() {
+    async fn document_gets_message_from_creator() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
         let actor_id = format!("{}/actor", did);
 
-        let body = NoteMd1kFields::new(
-            NoteType::Note,
+        let document = NoteMd1kFields::new(
             "abc".to_string(),
             actor_id.clone().try_into().unwrap(),
             None,
         )
         .await
         .unwrap();
-        let body_id = body.id().as_str();
-        let message = build_message(&jwk, body_id, None).await;
+        let document_id = document.id().as_str();
+        let message = build_message(&jwk, document_id, None).await;
 
         let response = api
             .clone()
@@ -250,17 +310,21 @@ mod test {
 
         let response = api
             .clone()
-            .oneshot(request_json("POST", &format!("/api/ap/{}", body_id), &body))
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/ap/{}", document_id),
+                &document,
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        // server returns the message fo the body
+        // server returns the message fo the document
         let response = api
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/createdBy/{}", body_id, actor_id),
+                &format!("/api/ap/{}/createdBy/{}", document_id, actor_id),
             ))
             .await
             .unwrap();
@@ -271,22 +335,21 @@ mod test {
     }
 
     #[tokio::test]
-    async fn wont_update_invalid_body() {
+    async fn wont_update_invalid_document() {
         let api = build_test_api().await;
 
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
         let did = did_from_jwk(&jwk).unwrap();
 
-        let body = NoteMd1kFields::new(
-            NoteType::Note,
+        let document = NoteMd1kFields::new(
             "abc".to_string(),
             "did:example:a".to_string().try_into().unwrap(),
             None,
         )
         .await
         .unwrap();
-        let body_id = body.id().as_str();
-        let message = build_message(&jwk, body_id, None).await;
+        let document_id = document.id().as_str();
+        let message = build_message(&jwk, document_id, None).await;
 
         let response = api
             .clone()
@@ -302,13 +365,13 @@ mod test {
         // posting to wrong ID
         let response = api
             .clone()
-            .oneshot(request_json("POST", "/api/ap/urn:cid:invalid", &body))
+            .oneshot(request_json("POST", "/api/ap/urn:cid:invalid", &document))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-        // body contents don't match ID
-        let mut invalid = serde_json::to_value(&body).unwrap();
+        // document contents don't match ID
+        let mut invalid = serde_json::to_value(&document).unwrap();
         invalid.get_mut("content").map(|x| {
             *x = "abcd"
                 .to_string()
@@ -321,7 +384,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", body_id),
+                &format!("/api/ap/{}", document_id),
                 &invalid,
             ))
             .await
@@ -343,21 +406,20 @@ mod test {
     #[tokio::test]
     async fn wont_post_unknown() {
         let api = build_test_api().await;
-        let body = NoteMd1kFields::new(
-            NoteType::Note,
+        let document = NoteMd1kFields::new(
             "abc".to_string(),
             "did:example:a".to_string().try_into().unwrap(),
             None,
         )
         .await
         .unwrap();
-        let document_id = body.id().as_str();
+        let document_id = document.id().as_str();
         let response = api
             .clone()
             .oneshot(request_json(
                 "POST",
                 &format!("/api/ap/{}", document_id),
-                &body,
+                &document,
             ))
             .await
             .unwrap();

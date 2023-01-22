@@ -10,7 +10,7 @@ use serde_json;
 use ssi::jsonld::{json_to_dataset, ContextLoader};
 use ssi::urdna2015;
 
-use crate::model::URI;
+use crate::model::Uri;
 use crate::new_context_loader;
 
 /// Build a CID from a JSON-LD document.
@@ -33,11 +33,11 @@ pub async fn cid_from_json(
 ///
 /// This is an ad-hoc extension of the `urn` namespace and might have
 /// conflicts.
-pub fn uri_from_cid(cid: Cid) -> Result<URI> {
-    Ok(URI::try_from(format!("urn:cid:{}", cid.to_string()))?)
+pub fn uri_from_cid(cid: Cid) -> Result<Uri> {
+    Ok(Uri::try_from(format!("urn:cid:{}", cid.to_string()))?)
 }
 
-pub fn cid_from_uri(uri: &URI) -> Result<Cid> {
+pub fn cid_from_uri(uri: &Uri) -> Result<Cid> {
     let uri_str = uri.as_str();
     if uri_str.len() < 8 {
         Err(Error::msg("URI does not contain a CID"))?;
@@ -49,7 +49,7 @@ pub fn cid_from_uri(uri: &URI) -> Result<Cid> {
 #[async_trait]
 pub trait CidVerifier<WithoutCid: Serialize + Sized + Sync> {
     /// Return a CID and the `Serializer` object without the CID.
-    fn extract_cid(&self) -> Result<(&URI, &WithoutCid)>;
+    fn extract_cid(&self) -> Result<(&Uri, &WithoutCid)>;
 
     /// Verify the object's CID matches its contents.
     async fn verify_cid(&self) -> Result<()> {
@@ -101,12 +101,12 @@ mod test {
 
     #[derive(Debug)]
     pub struct DataWithId {
-        pub id: URI,
+        pub id: Uri,
         pub data: Data,
     }
 
     impl CidVerifier<Data> for DataWithId {
-        fn extract_cid(&self) -> Result<(&URI, &Data)> {
+        fn extract_cid(&self) -> Result<(&Uri, &Data)> {
             Ok((&self.id, &self.data))
         }
     }

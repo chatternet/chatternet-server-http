@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{CtxSigStream, URI};
+use super::{CtxSigStream, Uri};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum CollectionType {
@@ -13,14 +13,14 @@ pub enum CollectionType {
 pub struct CollectionFields<T> {
     #[serde(rename = "@context")]
     context: CtxSigStream,
-    id: URI,
+    id: Uri,
     #[serde(rename = "type")]
     type_: CollectionType,
     items: Vec<T>,
 }
 
 impl<T> CollectionFields<T> {
-    pub fn new(id: URI, type_: CollectionType, items: Vec<T>) -> Self {
+    pub fn new(id: Uri, type_: CollectionType, items: Vec<T>) -> Self {
         CollectionFields {
             context: CtxSigStream::new(),
             id,
@@ -31,13 +31,13 @@ impl<T> CollectionFields<T> {
 }
 
 pub trait Collection<T> {
-    fn id(&self) -> &URI;
+    fn id(&self) -> &Uri;
     fn type_(&self) -> CollectionType;
     fn items(&self) -> &Vec<T>;
 }
 
 impl<T> Collection<T> for CollectionFields<T> {
-    fn id(&self) -> &URI {
+    fn id(&self) -> &Uri {
         &self.id
     }
     fn type_(&self) -> CollectionType {
@@ -59,21 +59,21 @@ pub enum CollectionPageType {
 pub struct CollectionPageFields<T> {
     #[serde(rename = "@context")]
     context: CtxSigStream,
-    id: URI,
+    id: Uri,
     #[serde(rename = "type")]
     type_: CollectionPageType,
     items: Vec<T>,
-    part_of: URI,
-    next: Option<URI>,
+    part_of: Uri,
+    next: Option<Uri>,
 }
 
 impl<T> CollectionPageFields<T> {
     pub fn new(
-        id: URI,
+        id: Uri,
         type_: CollectionPageType,
         items: Vec<T>,
-        part_of: URI,
-        next: Option<URI>,
+        part_of: Uri,
+        next: Option<Uri>,
     ) -> Self {
         CollectionPageFields {
             context: CtxSigStream::new(),
@@ -87,15 +87,15 @@ impl<T> CollectionPageFields<T> {
 }
 
 pub trait CollectionPage<T> {
-    fn id(&self) -> &URI;
+    fn id(&self) -> &Uri;
     fn type_(&self) -> CollectionPageType;
     fn items(&self) -> &Vec<T>;
-    fn part_of(&self) -> &URI;
-    fn next(&self) -> &Option<URI>;
+    fn part_of(&self) -> &Uri;
+    fn next(&self) -> &Option<Uri>;
 }
 
 impl<T> CollectionPage<T> for CollectionPageFields<T> {
-    fn id(&self) -> &URI {
+    fn id(&self) -> &Uri {
         &self.id
     }
     fn type_(&self) -> CollectionPageType {
@@ -104,10 +104,10 @@ impl<T> CollectionPage<T> for CollectionPageFields<T> {
     fn items(&self) -> &Vec<T> {
         &self.items
     }
-    fn part_of(&self) -> &URI {
+    fn part_of(&self) -> &Uri {
         &self.part_of
     }
-    fn next(&self) -> &Option<URI> {
+    fn next(&self) -> &Option<Uri> {
         &self.next
     }
 }
@@ -121,7 +121,7 @@ mod test {
     #[tokio::test]
     async fn builds_collection() {
         let collection = CollectionFields::new(
-            URI::try_from("id:a".to_string()).unwrap(),
+            Uri::try_from("id:a".to_string()).unwrap(),
             CollectionType::Collection,
             vec!["abc", "def"],
         );
@@ -133,11 +133,11 @@ mod test {
     #[tokio::test]
     async fn builds_collection_page() {
         let collection = CollectionPageFields::new(
-            URI::try_from("id:a/&start_idx=0".to_string()).unwrap(),
+            Uri::try_from("id:a/&start_idx=0".to_string()).unwrap(),
             CollectionPageType::OrderedCollectionPage,
             vec!["abc", "def"],
-            URI::try_from("id:a".to_string()).unwrap(),
-            Some(URI::try_from("id:a/&start_idx=2".to_string()).unwrap()),
+            Uri::try_from("id:a".to_string()).unwrap(),
+            Some(Uri::try_from("id:a/&start_idx=2".to_string()).unwrap()),
         );
         assert_eq!(collection.id.as_str(), "id:a/&start_idx=0");
         assert_eq!(collection.items()[0], "abc");
