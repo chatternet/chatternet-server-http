@@ -46,11 +46,14 @@ mod test {
     #[tokio::test]
     async fn builds_inbox() {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = MessageBuilder::new(&jwk, ActivityType::Create, vec!["id:a".to_string()])
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let message = MessageBuilder::new(
+            &jwk,
+            ActivityType::Create,
+            vec!["id:a".try_into().unwrap()].try_into().unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
         let message_id = message.id();
 
         let inbox = new_inbox("did:example:a", vec![message.clone()], 4, 0, Some(3)).unwrap();

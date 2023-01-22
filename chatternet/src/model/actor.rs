@@ -9,7 +9,6 @@ use ssi::jwk::JWK;
 use ssi::ldp::{now_ms, LinkedDataDocument};
 use ssi::ldp::{Error as LdpError, Proof};
 use ssi::rdf::DataSet;
-use std::str::FromStr;
 
 use crate::didkey::{actor_id_from_did, did_from_actor_id, did_from_jwk};
 use crate::model::Uri;
@@ -66,7 +65,7 @@ impl ActorFields {
     ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
         let actor_id = actor_id_from_did(&did)?;
-        let id = Uri::from_str(&actor_id)?;
+        let id = Uri::try_from(actor_id)?;
         let published = now_ms();
         let actor = ActorNoProof {
             context: CtxSigStream::new(),
@@ -225,7 +224,7 @@ mod test {
             .await
             .unwrap();
         actor.verify().await.unwrap();
-        let name = ActorName::from_str("abcd").unwrap();
+        let name = ActorName::try_from("abcd").unwrap();
         let actor = ActorFields {
             proof: actor.proof,
             no_proof: ActorNoProof {

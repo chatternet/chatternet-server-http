@@ -21,16 +21,27 @@ impl std::convert::TryFrom<String> for Uri {
     }
 }
 
-impl core::str::FromStr for Uri {
-    type Err = Error;
-    fn from_str(uri: &str) -> Result<Self, Self::Err> {
-        Uri::try_from(String::from(uri))
+impl<'a> std::convert::TryFrom<&'a str> for Uri {
+    type Error = Error;
+    fn try_from(uri: &'a str) -> Result<Self, Self::Error> {
+        if !uri.contains(':') || uri.len() > 2048 {
+            Err(Error::msg("invalid URI string"))?
+        }
+        Ok(Uri(uri.to_string()))
     }
 }
 
-impl Uri {
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
+impl std::str::FromStr for Uri {
+    type Err = Error;
+    fn from_str(uri: &str) -> Result<Self, Self::Err> {
+        Uri::try_from(uri)
+    }
+}
+
+impl std::ops::Deref for Uri {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -42,8 +53,6 @@ impl std::fmt::Display for Uri {
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]
@@ -58,7 +67,7 @@ mod test {
 
     #[test]
     fn builds_from_str() {
-        Uri::from_str("a:b").unwrap();
+        Uri::try_from("a:b").unwrap();
     }
 
     #[test]
@@ -96,9 +105,9 @@ mod test {
     #[test]
     fn serializes_and_deserializes() {
         let value: Uri =
-            serde_json::from_value(serde_json::to_value(&Uri::from_str("a:b").unwrap()).unwrap())
+            serde_json::from_value(serde_json::to_value(&Uri::try_from("a:b").unwrap()).unwrap())
                 .unwrap();
-        assert_eq!(value, Uri::from_str("a:b").unwrap());
+        assert_eq!(value, Uri::try_from("a:b").unwrap());
     }
 
     #[test]

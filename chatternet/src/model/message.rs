@@ -19,7 +19,7 @@ use crate::proof::{build_proof, ProofVerifier};
 use super::vecmax::VecMax;
 use super::CtxSigStream;
 
-const MAX_URIS: usize = 256;
+pub type VecUris = VecMax<Uri, 256>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum ActivityType {
@@ -38,11 +38,11 @@ pub struct MessageNoIdProof {
     #[serde(rename = "type")]
     type_: ActivityType,
     actor: Uri,
-    object: VecMax<Uri, MAX_URIS>,
+    object: VecUris,
     published: DateTime<Utc>,
-    to: Option<VecMax<Uri, MAX_URIS>>,
-    origin: Option<VecMax<Uri, MAX_URIS>>,
-    target: Option<VecMax<Uri, MAX_URIS>>,
+    to: Option<VecUris>,
+    origin: Option<VecUris>,
+    target: Option<VecUris>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -62,57 +62,37 @@ pub struct MessageFields {
 pub struct MessageBuilder<'a> {
     jwk: &'a JWK,
     type_: ActivityType,
-    object: VecMax<Uri, MAX_URIS>,
-    to: Option<VecMax<Uri, MAX_URIS>>,
-    origin: Option<VecMax<Uri, MAX_URIS>>,
-    target: Option<VecMax<Uri, MAX_URIS>>,
+    object: VecUris,
+    to: Option<VecUris>,
+    origin: Option<VecUris>,
+    target: Option<VecUris>,
 }
 
 impl<'a> MessageBuilder<'a> {
-    pub fn new(jwk: &'a JWK, type_: ActivityType, object_ids: Vec<String>) -> Result<Self> {
-        let object: VecMax<Uri, MAX_URIS> = object_ids
-            .into_iter()
-            .map(|id| Uri::try_from(id).unwrap())
-            .collect::<Vec<Uri>>()
-            .try_into()?;
-        Ok(Self {
+    pub fn new(jwk: &'a JWK, type_: ActivityType, object: VecUris) -> Self {
+        Self {
             jwk,
             type_,
             object,
             to: None,
             origin: None,
             target: None,
-        })
+        }
     }
 
-    pub fn to(mut self, to: Vec<String>) -> Result<Self> {
-        let to: VecMax<Uri, MAX_URIS> = to
-            .into_iter()
-            .map(|id| Uri::try_from(id).unwrap())
-            .collect::<Vec<Uri>>()
-            .try_into()?;
+    pub fn to(mut self, to: VecUris) -> Self {
         self.to = Some(to);
-        Ok(self)
+        self
     }
 
-    pub fn origin(mut self, origin: Vec<String>) -> Result<Self> {
-        let origin: VecMax<Uri, MAX_URIS> = origin
-            .into_iter()
-            .map(|id| Uri::try_from(id).unwrap())
-            .collect::<Vec<Uri>>()
-            .try_into()?;
+    pub fn origin(mut self, origin: VecUris) -> Self {
         self.origin = Some(origin);
-        Ok(self)
+        self
     }
 
-    pub fn target(mut self, target: Vec<String>) -> Result<Self> {
-        let target: VecMax<Uri, MAX_URIS> = target
-            .into_iter()
-            .map(|id| Uri::try_from(id).unwrap())
-            .collect::<Vec<Uri>>()
-            .try_into()?;
+    pub fn target(mut self, target: VecUris) -> Self {
         self.target = Some(target);
-        Ok(self)
+        self
     }
 
     pub async fn build(self) -> Result<MessageFields> {
@@ -132,10 +112,10 @@ impl MessageFields {
     pub async fn new(
         jwk: &JWK,
         type_: ActivityType,
-        object: VecMax<Uri, MAX_URIS>,
-        to: Option<VecMax<Uri, MAX_URIS>>,
-        origin: Option<VecMax<Uri, MAX_URIS>>,
-        target: Option<VecMax<Uri, MAX_URIS>>,
+        object: VecUris,
+        to: Option<VecUris>,
+        origin: Option<VecUris>,
+        target: Option<VecUris>,
     ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
         let actor_id = Uri::try_from(actor_id_from_did(&did)?)?;
@@ -216,11 +196,11 @@ pub trait Message: CidVerifier<MessageNoId> + ProofVerifier<MessageNoIdProof> {
     fn context(&self) -> &CtxSigStream;
     fn type_(&self) -> ActivityType;
     fn actor(&self) -> &Uri;
-    fn object(&self) -> &VecMax<Uri, MAX_URIS>;
+    fn object(&self) -> &VecUris;
     fn published(&self) -> &DateTime<Utc>;
-    fn to(&self) -> &Option<VecMax<Uri, MAX_URIS>>;
-    fn origin(&self) -> &Option<VecMax<Uri, MAX_URIS>>;
-    fn target(&self) -> &Option<VecMax<Uri, MAX_URIS>>;
+    fn to(&self) -> &Option<VecUris>;
+    fn origin(&self) -> &Option<VecUris>;
+    fn target(&self) -> &Option<VecUris>;
 
     async fn verify(&self) -> Result<()> {
         self.verify_cid().await?;
@@ -245,19 +225,19 @@ impl Message for MessageFields {
     fn actor(&self) -> &Uri {
         &self.no_id.no_proof.actor
     }
-    fn object(&self) -> &VecMax<Uri, MAX_URIS> {
+    fn object(&self) -> &VecUris {
         &self.no_id.no_proof.object
     }
     fn published(&self) -> &DateTime<Utc> {
         &self.no_id.no_proof.published
     }
-    fn to(&self) -> &Option<VecMax<Uri, MAX_URIS>> {
+    fn to(&self) -> &Option<VecUris> {
         &self.no_id.no_proof.to
     }
-    fn origin(&self) -> &Option<VecMax<Uri, MAX_URIS>> {
+    fn origin(&self) -> &Option<VecUris> {
         &self.no_id.no_proof.origin
     }
-    fn target(&self) -> &Option<VecMax<Uri, MAX_URIS>> {
+    fn target(&self) -> &Option<VecUris> {
         &self.no_id.no_proof.target
     }
 }
@@ -272,28 +252,35 @@ mod test {
     #[tokio::test]
     async fn builds_and_verifies_message() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = MessageBuilder::new(&jwk, ActivityType::Create, vec!["id:a".to_string()])
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let message = MessageBuilder::new(
+            &jwk,
+            ActivityType::Create,
+            vec!["id:a".try_into().unwrap()].try_into().unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
         message.verify().await.unwrap();
     }
 
     #[tokio::test]
     async fn doesnt_verify_modified_data() {
         let jwk = didkey::build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = MessageBuilder::new(&jwk, ActivityType::Create, vec!["id:a".to_string()])
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let message = MessageBuilder::new(
+            &jwk,
+            ActivityType::Create,
+            vec!["id:a".try_into().unwrap()].try_into().unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
         let message_diff = MessageBuilder::new(
             &jwk,
             ActivityType::Create,
-            vec!["id:a".to_string(), "id:b".to_string()],
+            vec!["id:a".try_into().unwrap(), "id:b".try_into().unwrap()]
+                .try_into()
+                .unwrap(),
         )
-        .unwrap()
         .build()
         .await
         .unwrap();

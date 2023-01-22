@@ -15,8 +15,15 @@ impl<T, const N: usize> std::convert::TryFrom<Vec<T>> for VecMax<T, N> {
     }
 }
 
-impl<T, const N: usize> VecMax<T, N> {
-    pub fn as_vec(&self) -> &Vec<T> {
+impl<T, const N: usize> std::ops::Deref for VecMax<T, N> {
+    type Target = Vec<T>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T, const N: usize> AsRef<Vec<T>> for VecMax<T, N> {
+    fn as_ref(&self) -> &Vec<T> {
         &self.0
     }
 }
@@ -38,7 +45,7 @@ mod test {
     #[test]
     fn returns_as_vec() {
         assert_eq!(
-            VecMax::<_, 3>::try_from(vec![1, 2, 3]).unwrap().as_vec(),
+            VecMax::<_, 3>::try_from(vec![1, 2, 3]).unwrap().as_ref(),
             &vec![1, 2, 3],
         );
     }
@@ -49,7 +56,7 @@ mod test {
             serde_json::to_value(&VecMax::<i32, 3>::try_from(vec![1, 2, 3]).unwrap()).unwrap(),
         )
         .unwrap();
-        assert_eq!(value.as_vec(), &vec![1, 2, 3],);
+        assert_eq!(value.as_ref(), &vec![1, 2, 3],);
     }
 
     #[test]

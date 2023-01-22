@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::{actor_id_from_did, did_from_jwk};
-use chatternet::model::{ActivityType, Message, MessageBuilder, MessageFields};
+use chatternet::model::{ActivityType, Message, MessageBuilder, MessageFields, Uri};
 use sqlx::{Connection, SqliteConnection};
 use ssi::jwk::JWK;
 
@@ -12,7 +12,7 @@ use crate::db::{self};
 
 pub fn build_audiences_id(message: &MessageFields) -> Vec<String> {
     if let Some(to) = message.to() {
-        to.as_vec().iter().map(|x| x.to_string()).collect()
+        to.iter().map(|x| x.to_string()).collect()
     } else {
         vec![]
     }
@@ -23,12 +23,7 @@ async fn handle_follow(
     connection: &mut SqliteConnection,
 ) -> Result<(), AppError> {
     let actor_id = message.actor().as_str();
-    let objects_id: Vec<&str> = message
-        .object()
-        .as_vec()
-        .iter()
-        .map(|x| x.as_str())
-        .collect();
+    let objects_id: Vec<&str> = message.object().iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
         db::put_actor_following(&mut *connection, &actor_id, &object_id)
             .await
@@ -50,12 +45,7 @@ async fn handle_unfollow(
     connection: &mut SqliteConnection,
 ) -> Result<(), AppError> {
     let actor_id = message.actor().as_str();
-    let objects_id: Vec<&str> = message
-        .object()
-        .as_vec()
-        .iter()
-        .map(|x| x.as_str())
-        .collect();
+    let objects_id: Vec<&str> = message.object().iter().map(|x| x.as_str()).collect();
     for object_id in objects_id {
         db::delete_actor_following(&mut *connection, &actor_id, &object_id)
             .await
@@ -79,10 +69,10 @@ async fn handle_add(
         Some(target) => target,
         None => return Err(AppError::MessageNotValid),
     };
-    if target.as_vec().len() != 1 {
+    if target.len() != 1 {
         return Err(AppError::MessageNotValid);
     }
-    let target = match target.as_vec().first() {
+    let target = match target.first() {
         Some(target) => target,
         None => return Err(AppError::MessageNotValid),
     };
@@ -107,10 +97,10 @@ async fn handle_remove(
         Some(target) => target,
         None => return Err(AppError::MessageNotValid),
     };
-    if target.as_vec().len() != 1 {
+    if target.len() != 1 {
         return Err(AppError::MessageNotValid);
     }
-    let target = match target.as_vec().first() {
+    let target = match target.first() {
         Some(target) => target,
         None => return Err(AppError::MessageNotValid),
     };
@@ -161,7 +151,7 @@ async fn delete_message(
         .map_err(|_| AppError::DbQueryFailed)?;
 
     // delete the document documents if they are not associated to any other message
-    for document_id in message.object().as_vec() {
+    for document_id in message.object().iter() {
         if db::has_message_with_document(&mut *connection, document_id.as_str())
             .await
             .map_err(|_| AppError::DbQueryFailed)?
@@ -181,12 +171,8 @@ async fn handle_delete(
     connection: &mut SqliteConnection,
 ) -> Result<(), AppError> {
     // can delete only one document at a time
-    let document_id = message
-        .object()
-        .as_vec()
-        .first()
-        .ok_or(AppError::MessageNotValid)?;
-    if message.object().as_vec().len() != 1 {
+    let document_id = message.object().first().ok_or(AppError::MessageNotValid)?;
+    if message.object().len() != 1 {
         Err(AppError::MessageNotValid)?
     }
 
@@ -246,12 +232,7 @@ async fn store_message(
     .await
     .map_err(|_| AppError::DbQueryFailed)?;
     // associate object documents with this message
-    let objects_id: Vec<&str> = message
-        .object()
-        .as_vec()
-        .iter()
-        .map(|x| x.as_str())
-        .collect();
+    let objects_id: Vec<&str> = message.object().iter().map(|x| x.as_str()).collect();
     // also associate actor that created the object document
     let created_by = if message.type_() == ActivityType::Create {
         Some(message.actor().as_str())
@@ -305,25 +286,21 @@ async fn handle_view(
         return Ok(());
     }
 
-    let server_followers = format!("{}/followers", server_actor_id);
-    let view_message = MessageBuilder::new(
-        &jwk,
-        ActivityType::View,
-        message
-            .object()
-            .as_vec()
-            .iter()
-            .map(|x| x.as_str().to_string())
-            .collect(),
-    )
-    .map_err(|_| AppError::ServerMisconfigured)?
-    .to(vec![server_followers])
-    .map_err(|_| AppError::ServerMisconfigured)?
-    .origin(vec![message.id().as_str().to_string()])
-    .map_err(|_| AppError::ServerMisconfigured)?
-    .build()
-    .await
-    .map_err(|_| AppError::ServerMisconfigured)?;
+    let server_followers: Uri = format!("{}/followers", server_actor_id)
+        .try_into()
+        .map_err(|_| AppError::ServerMisconfigured)?;
+    let view_message = MessageBuilder::new(&jwk, ActivityType::View, message.object().clone())
+        .to(vec![server_followers]
+            .try_into()
+            .map_err(|_| AppError::ServerMisconfigured)?)
+        .origin(
+            vec![message.id().clone()]
+                .try_into()
+                .map_err(|_| AppError::ServerMisconfigured)?,
+        )
+        .build()
+        .await
+        .map_err(|_| AppError::ServerMisconfigured)?;
 
     store_message(&view_message, &mut *connection).await?;
 
@@ -557,14 +534,19 @@ mod test {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
-        let message_remove =
-            MessageBuilder::new(&jwk, ActivityType::Remove, vec!["tag:2".to_string()])
-                .unwrap()
-                .target(vec![format!("{}/actor/following", did)])
-                .unwrap()
-                .build()
-                .await
-                .unwrap();
+        let message_remove = MessageBuilder::new(
+            &jwk,
+            ActivityType::Remove,
+            vec!["tag:2".try_into().unwrap()].try_into().unwrap(),
+        )
+        .target(
+            vec![format!("{}/actor/following", did).try_into().unwrap()]
+                .try_into()
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
         let response = api
             .clone()
             .oneshot(request_json(
@@ -597,13 +579,19 @@ mod test {
         let did = did_from_jwk(&jwk).unwrap();
 
         let message_1 = build_follow(vec!["tag:1".to_string()], &jwk).await;
-        let message_2 = MessageBuilder::new(&jwk, ActivityType::Remove, vec!["tag:1".to_string()])
-            .unwrap()
-            .target(vec![format!("{}/actor/following", did)])
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let message_2 = MessageBuilder::new(
+            &jwk,
+            ActivityType::Remove,
+            vec!["tag:1".try_into().unwrap()].try_into().unwrap(),
+        )
+        .target(
+            vec![format!("{}/actor/following", did).try_into().unwrap()]
+                .try_into()
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
         let message_3 = loop {
             let message = build_follow(vec!["tag:1".to_string()], &jwk).await;
             if message.published() > message_2.published() {
@@ -1054,7 +1042,7 @@ mod test {
             inbox
                 .items()
                 .iter()
-                .map(|x| x.object().as_vec().iter().map(|x| x.as_str()))
+                .map(|x| x.object().iter().map(|x| x.as_str()))
                 .flatten()
                 .collect::<Vec<&str>>(),
             ["id:1"]
