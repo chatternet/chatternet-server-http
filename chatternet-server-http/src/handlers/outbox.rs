@@ -2,9 +2,10 @@ use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::{actor_id_from_did, did_from_jwk};
-use chatternet::model::{ActivityType, Message, MessageBuilder, MessageFields, Uri};
+use chatternet::model::{ActivityType, Message, MessageBuilder, MessageFields, Uri, VecUris};
 use sqlx::{Connection, SqliteConnection};
 use ssi::jwk::JWK;
+use tap::Pipe;
 
 use super::error::AppError;
 use super::{use_mutable, AppState};
@@ -12,7 +13,7 @@ use crate::db::{self};
 
 pub fn build_audiences_id(message: &MessageFields) -> Vec<String> {
     if let Some(to) = message.to() {
-        to.iter().map(|x| x.to_string()).collect()
+        to.as_ref().iter().map(|x| x.to_string()).collect()
     } else {
         vec![]
     }
@@ -289,15 +290,18 @@ async fn handle_view(
     let server_followers: Uri = format!("{}/followers", server_actor_id)
         .try_into()
         .map_err(|_| AppError::ServerMisconfigured)?;
+    let extended_to: VecUris = if let Some(previous_to) = message.to() {
+        std::iter::once(&server_followers)
+            .chain(previous_to.as_ref())
+            .cloned()
+            .collect::<Vec<Uri>>()
+            .pipe(VecUris::from_truncate)
+    } else {
+        VecUris::from_truncate(vec![server_followers])
+    };
     let view_message = MessageBuilder::new(&jwk, ActivityType::View, message.object().clone())
-        .to(vec![server_followers]
-            .try_into()
-            .map_err(|_| AppError::ServerMisconfigured)?)
-        .origin(
-            vec![message.id().clone()]
-                .try_into()
-                .map_err(|_| AppError::ServerMisconfigured)?,
-        )
+        .to(extended_to)
+        .origin(vec![message.id().clone()].pipe(VecUris::from_truncate))
         .build()
         .await
         .map_err(|_| AppError::ServerMisconfigured)?;

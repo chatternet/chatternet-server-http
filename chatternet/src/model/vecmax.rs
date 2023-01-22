@@ -15,6 +15,13 @@ impl<T, const N: usize> std::convert::TryFrom<Vec<T>> for VecMax<T, N> {
     }
 }
 
+impl<T: Clone, const N: usize> VecMax<T, N> {
+    pub fn from_truncate(mut vec: Vec<T>) -> VecMax<T, N> {
+        vec.truncate(N);
+        VecMax(vec)
+    }
+}
+
 impl<T, const N: usize> std::ops::Deref for VecMax<T, N> {
     type Target = Vec<T>;
     fn deref(&self) -> &Self::Target {
@@ -35,6 +42,14 @@ mod test {
     #[test]
     fn builds_from_vec() {
         VecMax::<_, 3>::try_from(vec![1, 2, 3]).unwrap();
+    }
+
+    #[test]
+    fn builds_from_vec_truncating() {
+        assert_eq!(
+            VecMax::<_, 2>::from_truncate(vec![1, 2, 3]).as_ref(),
+            &vec![1, 2],
+        );
     }
 
     #[test]
