@@ -1,7 +1,7 @@
 use anyhow::Result;
 use tap::Pipe;
 
-use super::{CollectionPageFields, CollectionPageType, MessageFields, URI};
+use super::{CollectionPageFields, CollectionPageType, MessageFields, Uri};
 
 pub fn new_inbox(
     actor_id: &str,
@@ -10,19 +10,19 @@ pub fn new_inbox(
     start_idx: u64,
     end_idx: Option<u64>,
 ) -> Result<CollectionPageFields<MessageFields>> {
-    let collection_id = format!("{}/inbox", actor_id).pipe(URI::try_from)?;
+    let collection_id = format!("{}/inbox", actor_id).pipe(Uri::try_from)?;
     let id = format!(
         "{}/inbox?startIdx={}&pageSize={}",
         actor_id, start_idx, page_size
     )
-    .pipe(URI::try_from)?;
+    .pipe(Uri::try_from)?;
     let next = match end_idx {
         Some(end_idx) => Some(
             format!(
                 "{}/inbox?startIdx={}&pageSize={}",
                 actor_id, end_idx, page_size
             )
-            .pipe(URI::try_from)?,
+            .pipe(Uri::try_from)?,
         ),
         None => None,
     };
@@ -46,11 +46,14 @@ mod test {
     #[tokio::test]
     async fn builds_inbox() {
         let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
-        let message = MessageBuilder::new(&jwk, ActivityType::Create, vec!["id:a".to_string()])
-            .unwrap()
-            .build()
-            .await
-            .unwrap();
+        let message = MessageBuilder::new(
+            &jwk,
+            ActivityType::Create,
+            vec!["id:a".try_into().unwrap()].try_into().unwrap(),
+        )
+        .build()
+        .await
+        .unwrap();
         let message_id = message.id();
 
         let inbox = new_inbox("did:example:a", vec![message.clone()], 4, 0, Some(3)).unwrap();

@@ -21,22 +21,26 @@ impl<const N: usize> std::convert::TryFrom<String> for StringMaxChars<N> {
     }
 }
 
-impl<const N: usize> core::str::FromStr for StringMaxChars<N> {
-    type Err = Error;
-    fn from_str(string: &str) -> Result<Self, Self::Err> {
-        StringMaxChars::try_from(String::from(string))
+impl<'a, const N: usize> std::convert::TryFrom<&'a str> for StringMaxChars<N> {
+    type Error = Error;
+    fn try_from(string: &'a str) -> Result<Self, Self::Error> {
+        if string.chars().count() > N {
+            Err(Error::msg("string has too many characters"))?
+        }
+        Ok(StringMaxChars(string.to_string()))
     }
 }
 
-impl<const N: usize> StringMaxChars<N> {
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
+impl<const N: usize> std::ops::Deref for StringMaxChars<N> {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<const N: usize> std::fmt::Display for StringMaxChars<N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl<const N: usize> AsRef<str> for StringMaxChars<N> {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
@@ -60,57 +64,59 @@ impl<const N: usize> std::convert::TryFrom<String> for StringMaxBytes<N> {
     }
 }
 
-impl<const N: usize> core::str::FromStr for StringMaxBytes<N> {
-    type Err = Error;
-    fn from_str(string: &str) -> Result<Self, Self::Err> {
-        StringMaxBytes::try_from(String::from(string))
+impl<'a, const N: usize> std::convert::TryFrom<&'a str> for StringMaxBytes<N> {
+    type Error = Error;
+    fn try_from(string: &'a str) -> Result<Self, Self::Error> {
+        if string.len() > N {
+            Err(Error::msg("string has too many characters"))?
+        }
+        Ok(StringMaxBytes(string.to_string()))
     }
 }
 
-impl<const N: usize> StringMaxBytes<N> {
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
+impl<const N: usize> std::ops::Deref for StringMaxBytes<N> {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-impl<const N: usize> std::fmt::Display for StringMaxBytes<N> {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+impl<const N: usize> AsRef<str> for StringMaxBytes<N> {
+    fn as_ref(&self) -> &str {
+        &self.0
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::str::FromStr;
-
     use super::*;
 
     #[test]
-    fn builds_from_string() {
+    fn builds_try_froming() {
         StringMaxChars::<3>::try_from("Ābc".to_string()).unwrap();
         StringMaxBytes::<4>::try_from("Ābc".to_string()).unwrap();
     }
 
     #[test]
-    fn builds_from_str() {
-        StringMaxChars::<3>::from_str("Ābc").unwrap();
-        StringMaxBytes::<4>::from_str("Ābc").unwrap();
+    fn builds_try_from() {
+        StringMaxChars::<3>::try_from("Ābc").unwrap();
+        StringMaxBytes::<4>::try_from("Ābc").unwrap();
     }
 
     #[test]
     fn doesnt_build_too_long() {
-        StringMaxChars::<3>::from_str("Ābcd").unwrap_err();
-        StringMaxBytes::<4>::from_str("Ābcd").unwrap_err();
+        StringMaxChars::<3>::try_from("Ābcd").unwrap_err();
+        StringMaxBytes::<4>::try_from("Ābcd").unwrap_err();
     }
 
     #[test]
     fn builds_string_from() {
         assert_eq!(
-            String::from(StringMaxChars::<3>::from_str("Ābc").unwrap()),
+            String::from(StringMaxChars::<3>::try_from("Ābc").unwrap()),
             "Ābc"
         );
         assert_eq!(
-            String::from(StringMaxBytes::<4>::from_str("Ābc").unwrap()),
+            String::from(StringMaxBytes::<4>::try_from("Ābc").unwrap()),
             "Ābc"
         );
     }
@@ -118,11 +124,11 @@ mod test {
     #[test]
     fn returns_as_str() {
         assert_eq!(
-            StringMaxChars::<3>::from_str("Ābc").unwrap().as_str(),
+            StringMaxChars::<3>::try_from("Ābc").unwrap().as_str(),
             "Ābc"
         );
         assert_eq!(
-            StringMaxBytes::<4>::from_str("Ābc").unwrap().as_str(),
+            StringMaxBytes::<4>::try_from("Ābc").unwrap().as_str(),
             "Ābc"
         );
     }
@@ -130,11 +136,11 @@ mod test {
     #[test]
     fn formats_string() {
         assert_eq!(
-            StringMaxChars::<3>::from_str("Ābc").unwrap().to_string(),
+            StringMaxChars::<3>::try_from("Ābc").unwrap().to_string(),
             "Ābc"
         );
         assert_eq!(
-            StringMaxBytes::<4>::from_str("Ābc").unwrap().to_string(),
+            StringMaxBytes::<4>::try_from("Ābc").unwrap().to_string(),
             "Ābc"
         );
     }
@@ -142,12 +148,12 @@ mod test {
     #[test]
     fn serializes_and_deserializes() {
         let value: StringMaxChars<3> = serde_json::from_value(
-            serde_json::to_value(&StringMaxChars::<3>::from_str("Ābc").unwrap()).unwrap(),
+            serde_json::to_value(&StringMaxChars::<3>::try_from("Ābc").unwrap()).unwrap(),
         )
         .unwrap();
         assert_eq!(value.as_str(), "Ābc");
         let value: StringMaxBytes<4> = serde_json::from_value(
-            serde_json::to_value(&StringMaxBytes::<4>::from_str("Ābc").unwrap()).unwrap(),
+            serde_json::to_value(&StringMaxBytes::<4>::try_from("Ābc").unwrap()).unwrap(),
         )
         .unwrap();
         assert_eq!(value.as_str(), "Ābc");

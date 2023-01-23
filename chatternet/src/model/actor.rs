@@ -9,12 +9,12 @@ use ssi::jwk::JWK;
 use ssi::ldp::{now_ms, LinkedDataDocument};
 use ssi::ldp::{Error as LdpError, Proof};
 use ssi::rdf::DataSet;
-use std::str::FromStr;
 
 use crate::didkey::{actor_id_from_did, did_from_actor_id, did_from_jwk};
-use crate::model::URI;
+use crate::model::Uri;
 use crate::proof::{build_proof, get_proof_did, ProofVerifier};
 
+use super::document::Document;
 use super::stringmax::StringMaxChars;
 use super::CtxSigStream;
 
@@ -39,14 +39,14 @@ pub enum ActorType {
 pub struct ActorNoProof {
     #[serde(rename = "@context")]
     context: CtxSigStream,
-    id: URI,
+    id: Uri,
     #[serde(rename = "type")]
     type_: ActorType,
     published: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<ActorName>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    url: Option<URI>,
+    url: Option<Uri>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -65,7 +65,7 @@ impl ActorFields {
     ) -> Result<Self> {
         let did = did_from_jwk(jwk)?;
         let actor_id = actor_id_from_did(&did)?;
-        let id = URI::from_str(&actor_id)?;
+        let id = Uri::try_from(actor_id)?;
         let published = now_ms();
         let actor = ActorNoProof {
             context: CtxSigStream::new(),
@@ -73,7 +73,7 @@ impl ActorFields {
             type_,
             published,
             name: name.map(ActorName::try_from).transpose()?,
-            url: url.map(URI::try_from).transpose()?,
+            url: url.map(Uri::try_from).transpose()?,
         };
         let proof = build_proof(&actor, &jwk).await?;
         Ok(ActorFields {
@@ -124,12 +124,17 @@ impl ProofVerifier<ActorNoProof> for ActorFields {
 pub trait Actor: ProofVerifier<ActorNoProof> {
     fn proof(&self) -> &Proof;
     fn context(&self) -> &CtxSigStream;
-    fn id(&self) -> &URI;
     fn type_(&self) -> ActorType;
     fn published(&self) -> &DateTime<Utc>;
     fn name(&self) -> &Option<ActorName>;
-    fn url(&self) -> &Option<URI>;
+    fn url(&self) -> &Option<Uri>;
+}
 
+#[async_trait]
+impl Document for ActorFields {
+    fn id(&self) -> &Uri {
+        &self.no_proof.id
+    }
     async fn verify(&self) -> Result<()> {
         let actor_id = self.id().as_str();
         let did = did_from_actor_id(actor_id)?;
@@ -147,9 +152,6 @@ impl Actor for ActorFields {
     fn context(&self) -> &CtxSigStream {
         &self.no_proof.context
     }
-    fn id(&self) -> &URI {
-        &self.no_proof.id
-    }
     fn type_(&self) -> ActorType {
         self.no_proof.type_
     }
@@ -159,7 +161,7 @@ impl Actor for ActorFields {
     fn name(&self) -> &Option<ActorName> {
         &self.no_proof.name
     }
-    fn url(&self) -> &Option<URI> {
+    fn url(&self) -> &Option<Uri> {
         &self.no_proof.url
     }
     fn proof(&self) -> &Proof {
@@ -222,7 +224,7 @@ mod test {
             .await
             .unwrap();
         actor.verify().await.unwrap();
-        let name = ActorName::from_str("abcd").unwrap();
+        let name = ActorName::try_from("abcd").unwrap();
         let actor = ActorFields {
             proof: actor.proof,
             no_proof: ActorNoProof {

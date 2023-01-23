@@ -70,7 +70,7 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                         .route("/:id/actor/outbox", post(handle_outbox))
                         .route("/:id/actor/inbox", get(handle_inbox))
                         .route("/:id/actor/inbox/from/:id2/actor", get(handle_inbox_from))
-                        .route("/:id", get(handle_document_get).post(handle_body_post))
+                        .route("/:id", get(handle_document_get).post(handle_document_post))
                         .route("/:id/createdBy/:id2/actor", get(handle_document_get_create)),
                 ),
         )
@@ -117,7 +117,7 @@ mod test_utils {
     use axum::http::{self, Request, Response};
     use axum::routing::Router;
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{ActivityType, MessageBuilder, MessageFields};
+    use chatternet::model::{ActivityType, MessageBuilder, MessageFields, Uri};
     use hyper;
     use hyper::body::HttpBody;
     use mime;
@@ -135,10 +135,18 @@ mod test_utils {
         document_id: &str,
         to: Option<Vec<String>>,
     ) -> MessageFields {
-        let builder =
-            MessageBuilder::new(&jwk, activity_type, vec![document_id.to_string()]).unwrap();
+        let builder = MessageBuilder::new(
+            &jwk,
+            activity_type,
+            vec![document_id.try_into().unwrap()].try_into().unwrap(),
+        );
         let builder = if let Some(to) = to {
-            builder.to(to).unwrap()
+            builder.to(to
+                .into_iter()
+                .map(|x| x.try_into().unwrap())
+                .collect::<Vec<Uri>>()
+                .try_into()
+                .unwrap())
         } else {
             builder
         };
@@ -155,13 +163,24 @@ mod test_utils {
 
     pub async fn build_follow(follows_id: Vec<String>, jwk: &JWK) -> MessageFields {
         let did = did_from_jwk(jwk).unwrap();
-        MessageBuilder::new(&jwk, ActivityType::Add, follows_id)
-            .unwrap()
-            .target(vec![format!("{}/actor/following", did)])
-            .unwrap()
-            .build()
-            .await
-            .unwrap()
+        MessageBuilder::new(
+            &jwk,
+            ActivityType::Add,
+            follows_id
+                .into_iter()
+                .map(|x| x.try_into().unwrap())
+                .collect::<Vec<Uri>>()
+                .try_into()
+                .unwrap(),
+        )
+        .target(
+            vec![format!("{}/actor/following", did).try_into().unwrap()]
+                .try_into()
+                .unwrap(),
+        )
+        .build()
+        .await
+        .unwrap()
     }
 
     pub async fn get_body<T, U>(response: Response<T>) -> U

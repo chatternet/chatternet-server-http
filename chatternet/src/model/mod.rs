@@ -14,9 +14,9 @@
 //! of the ActivityStreams `Collection` class.
 
 mod actor;
-mod body;
 mod collection;
 mod context;
+mod document;
 mod inbox;
 mod message;
 mod stringmax;
@@ -24,9 +24,9 @@ mod uri;
 mod vecmax;
 
 pub use actor::*;
-pub use body::*;
 pub use collection::*;
 pub use context::*;
+pub use document::*;
 pub use inbox::*;
 pub use message::*;
 pub use uri::*;

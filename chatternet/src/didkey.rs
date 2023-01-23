@@ -35,11 +35,16 @@ lazy_static! {
     static ref RE_DID: Regex = Regex::new(r"^did:key:z[a-km-zA-HJ-NP-Z1-9]+$").unwrap();
 }
 
+/// Check if the given string `did` is a valid DID Key.
+pub fn is_valid_did(did: &str) -> bool {
+    RE_DID.is_match(did)
+}
+
 /// Build the ChatterNet actor ID from the given `did`.
 ///
 /// The `did` is already a URI, this appends the `/actor` path to it.
 pub fn actor_id_from_did(did: &str) -> Result<String> {
-    if !RE_DID.is_match(did) {
+    if !is_valid_did(did) {
         Err(Error::msg("DID has invalid characters"))?;
     }
     Ok(format!("{}/actor", did))
@@ -50,7 +55,7 @@ pub fn did_from_actor_id(actor_id: &str) -> Result<String> {
     let (did, path) = actor_id
         .split_once("/")
         .ok_or(Error::msg("actor ID is not a did and path"))?;
-    if !RE_DID.is_match(did) {
+    if !is_valid_did(did) {
         Err(Error::msg("acotr ID doesn't contain a valid DID"))?;
     }
     if path != "actor" {

@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use chatternet::didkey::actor_id_from_did;
 use chatternet::model::{
     Actor, ActorFields, CollectionFields, CollectionPageFields, CollectionPageType, CollectionType,
-    URI,
+    Document, Uri,
 };
 use tap::Pipe;
 
@@ -83,7 +83,7 @@ pub async fn handle_actor_following(
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
     let uri =
-        URI::try_from(format!("{}/following", actor_id)).map_err(|_| AppError::ActorIdWrong)?;
+        Uri::try_from(format!("{}/following", actor_id)).map_err(|_| AppError::ActorIdWrong)?;
     let following = CollectionFields::new(uri, CollectionType::Collection, ids);
     Ok(Json(following))
 }
@@ -101,7 +101,7 @@ pub async fn handle_actor_followers(
         .await
         .map_err(|_| AppError::DbConnectionFailed)?;
     let collection_id =
-        URI::try_from(format!("{}/following", actor_id)).map_err(|_| AppError::ActorIdWrong)?;
+        Uri::try_from(format!("{}/following", actor_id)).map_err(|_| AppError::ActorIdWrong)?;
     let page_size = query.page_size.unwrap_or(32);
     let out = db::get_actor_followers(&mut *connection, &actor_id, page_size, query.start_idx)
         .await
@@ -113,7 +113,7 @@ pub async fn handle_actor_followers(
                 "{}/?startIdx={}&pageSize={}",
                 collection_id, start_idx, page_size
             )
-            .pipe(URI::try_from)
+            .pipe(Uri::try_from)
             .map_err(|_| AppError::ServerMisconfigured)?;
             let next_page = if out.low_idx > 0 {
                 Some(
@@ -123,7 +123,7 @@ pub async fn handle_actor_followers(
                         out.low_idx - 1,
                         page_size
                     )
-                    .pipe(URI::try_from)
+                    .pipe(Uri::try_from)
                     .map_err(|_| AppError::ServerMisconfigured)?,
                 )
             } else {
@@ -143,7 +143,7 @@ pub async fn handle_actor_followers(
                 "{}/?startIdx={}&pageSize={}",
                 collection_id, start_idx, page_size
             )
-            .pipe(URI::try_from)
+            .pipe(Uri::try_from)
             .map_err(|_| AppError::ServerMisconfigured)?;
             CollectionPageFields::new(
                 page_id,
@@ -164,7 +164,9 @@ mod test {
     use tower::ServiceExt;
 
     use chatternet::didkey::{build_jwk, did_from_jwk};
-    use chatternet::model::{Actor, ActorFields, ActorType, CollectionPage, CollectionPageFields};
+    use chatternet::model::{
+        Actor, ActorFields, ActorType, CollectionPage, CollectionPageFields, Document,
+    };
 
     use super::super::test_utils::*;
 
