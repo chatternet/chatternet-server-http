@@ -1,7 +1,0 @@
-#!/bin/bash
-cd /home/dh_3q3rw9/chatternet-server/
-running=$(screen -list | head -n -1 | tail -n +2 | awk -F' ' '{print $1}' | awk -F'.' '{print $2}')
-for name in $running; do
-    [[ $name == 'chatternet-server' ]] && exit 0
-done
-scripts/start

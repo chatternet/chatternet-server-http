@@ -1,3 +1,0 @@
-#!/bin/bash
-echo "stopping"
-screen -S chatternet-server -X quit
