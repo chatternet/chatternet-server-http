@@ -183,18 +183,14 @@ mod test {
 
         let response = api
             .clone()
-            .oneshot(request_json(
-                "POST",
-                &format!("/api/ap/{}/actor", did),
-                &actor,
-            ))
+            .oneshot(request_json("POST", &format!("/api/{}/actor", did), &actor))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
 
         let response = api
             .clone()
-            .oneshot(request_empty("GET", &format!("/api/ap/{}/actor", did)))
+            .oneshot(request_empty("GET", &format!("/api/{}/actor", did)))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -217,7 +213,7 @@ mod test {
         // did doesn't match actor ID
         let response = api
             .clone()
-            .oneshot(request_json("POST", "/api/ap/did:example:a/actor", &actor))
+            .oneshot(request_json("POST", "/api/did:example:a/actor", &actor))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -236,7 +232,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor", did),
+                &format!("/api/{}/actor", did),
                 &invalid,
             ))
             .await
@@ -267,7 +263,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor", did),
+                &format!("/api/{}/actor", did),
                 &actor_2,
             ))
             .await
@@ -278,7 +274,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor", did),
+                &format!("/api/{}/actor", did),
                 &actor_1,
             ))
             .await
@@ -287,7 +283,7 @@ mod test {
 
         let response = api
             .clone()
-            .oneshot(request_empty("GET", &format!("/api/ap/{}/actor", did)))
+            .oneshot(request_empty("GET", &format!("/api/{}/actor", did)))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -301,7 +297,7 @@ mod test {
         let api = build_test_api().await;
         let response = api
             .clone()
-            .oneshot(request_empty("GET", "/api/ap/did:key:za/actor"))
+            .oneshot(request_empty("GET", "/api/did:key:za/actor"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -322,7 +318,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &build_follow(
                     vec![
                         format!("{}/actor", did_1),
@@ -342,7 +338,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_2),
+                &format!("/api/{}/actor/outbox", did_2),
                 &build_follow(vec![format!("{}/actor", did_2)], &jwk_2).await,
             ))
             .await
@@ -353,7 +349,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/followers", did_2),
+                &format!("/api/{}/actor/followers", did_2),
             ))
             .await
             .unwrap();

@@ -172,7 +172,7 @@ mod test {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri(format!("/api/ap/{}", did))
+                    .uri(format!("/api/{}", did))
                     .body(HttpBody::empty())
                     .unwrap(),
             )
@@ -229,7 +229,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -241,7 +241,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", object_id),
+                &format!("/api/{}", object_id),
                 &object,
             ))
             .await
@@ -251,7 +251,7 @@ mod test {
         // server returns the object
         let response = api
             .clone()
-            .oneshot(request_empty("GET", &format!("/api/ap/{}", object_id)))
+            .oneshot(request_empty("GET", &format!("/api/{}", object_id)))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -262,7 +262,7 @@ mod test {
         // now possible to post the tag on the server
         let response = api
             .clone()
-            .oneshot(request_json("POST", &format!("/api/ap/{}", tag_id), &tag))
+            .oneshot(request_json("POST", &format!("/api/{}", tag_id), &tag))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -270,7 +270,7 @@ mod test {
         // server returns the tag
         let response = api
             .clone()
-            .oneshot(request_empty("GET", &format!("/api/ap/{}", tag_id)))
+            .oneshot(request_empty("GET", &format!("/api/{}", tag_id)))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -301,7 +301,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -312,7 +312,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", document_id),
+                &format!("/api/{}", document_id),
                 &document,
             ))
             .await
@@ -324,7 +324,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/createdBy/{}", document_id, actor_id),
+                &format!("/api/{}/createdBy/{}", document_id, actor_id),
             ))
             .await
             .unwrap();
@@ -355,7 +355,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -365,7 +365,7 @@ mod test {
         // posting to wrong ID
         let response = api
             .clone()
-            .oneshot(request_json("POST", "/api/ap/urn:cid:invalid", &document))
+            .oneshot(request_json("POST", "/api/urn:cid:invalid", &document))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -384,7 +384,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", document_id),
+                &format!("/api/{}", document_id),
                 &invalid,
             ))
             .await
@@ -397,7 +397,7 @@ mod test {
         let api = build_test_api().await;
         let response = api
             .clone()
-            .oneshot(request_empty("GET", "/api/ap/urn:cid:invalid"))
+            .oneshot(request_empty("GET", "/api/urn:cid:invalid"))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -418,7 +418,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", document_id),
+                &format!("/api/{}", document_id),
                 &document,
             ))
             .await

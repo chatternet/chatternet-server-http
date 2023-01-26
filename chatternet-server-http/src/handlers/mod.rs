@@ -59,20 +59,16 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                     "/version",
                     get(|| async { serde_json::to_string(VERSION).unwrap() }),
                 )
-                .nest(
-                    "/ap",
-                    Router::new()
-                        // when there is a trailing `/actor`, interpret ID as DID and use
-                        // actor-specific handlers
-                        .route("/:id/actor", get(handle_actor_get).post(handle_actor_post))
-                        .route("/:id/actor/following", get(handle_actor_following))
-                        .route("/:id/actor/followers", get(handle_actor_followers))
-                        .route("/:id/actor/outbox", post(handle_outbox))
-                        .route("/:id/actor/inbox", get(handle_inbox))
-                        .route("/:id/actor/inbox/from/:id2/actor", get(handle_inbox_from))
-                        .route("/:id", get(handle_document_get).post(handle_document_post))
-                        .route("/:id/createdBy/:id2/actor", get(handle_document_get_create)),
-                ),
+                // when there is a trailing `/actor`, interpret ID as DID and use
+                // actor-specific handlers
+                .route("/:id/actor", get(handle_actor_get).post(handle_actor_post))
+                .route("/:id/actor/following", get(handle_actor_following))
+                .route("/:id/actor/followers", get(handle_actor_followers))
+                .route("/:id/actor/outbox", post(handle_outbox))
+                .route("/:id/actor/inbox", get(handle_inbox))
+                .route("/:id/actor/inbox/from/:id2/actor", get(handle_inbox_from))
+                .route("/:id", get(handle_document_get).post(handle_document_post))
+                .route("/:id/createdBy/:id2/actor", get(handle_document_get_create)),
         )
         .layer(TraceLayer::new_for_http())
         .layer(

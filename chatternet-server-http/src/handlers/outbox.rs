@@ -411,7 +411,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -423,7 +423,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -434,7 +434,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &message.id().as_str()),
+                &format!("/api/{}", &message.id().as_str()),
             ))
             .await
             .unwrap();
@@ -457,7 +457,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                "/api/ap/did:example:a/actor/outbox",
+                "/api/did:example:a/actor/outbox",
                 &message,
             ))
             .await
@@ -479,7 +479,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &invalid,
             ))
             .await
@@ -499,7 +499,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -510,7 +510,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/following", did),
+                &format!("/api/{}/actor/following", did),
             ))
             .await
             .unwrap();
@@ -531,7 +531,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_1,
             ))
             .await
@@ -555,7 +555,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_remove,
             ))
             .await
@@ -566,7 +566,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/following", did),
+                &format!("/api/{}/actor/following", did),
             ))
             .await
             .unwrap();
@@ -607,7 +607,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_3,
             ))
             .await
@@ -618,7 +618,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_2,
             ))
             .await
@@ -629,7 +629,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_1,
             ))
             .await
@@ -640,7 +640,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/following", did),
+                &format!("/api/{}/actor/following", did),
             ))
             .await
             .unwrap();
@@ -670,7 +670,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message,
             ))
             .await
@@ -681,7 +681,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", document.id().as_str()),
+                &format!("/api/{}", document.id().as_str()),
                 &document,
             ))
             .await
@@ -692,7 +692,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &message.id().as_str()),
+                &format!("/api/{}", &message.id().as_str()),
             ))
             .await
             .unwrap();
@@ -702,7 +702,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &document.id().as_str()),
+                &format!("/api/{}", &document.id().as_str()),
             ))
             .await
             .unwrap();
@@ -712,7 +712,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_delete,
             ))
             .await
@@ -723,7 +723,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &message.id().as_str()),
+                &format!("/api/{}", &message.id().as_str()),
             ))
             .await
             .unwrap();
@@ -733,7 +733,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &document.id().as_str()),
+                &format!("/api/{}", &document.id().as_str()),
             ))
             .await
             .unwrap();
@@ -763,7 +763,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_1,
             ))
             .await
@@ -774,7 +774,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_2,
             ))
             .await
@@ -785,7 +785,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}", document.id().as_str()),
+                &format!("/api/{}", document.id().as_str()),
                 &document,
             ))
             .await
@@ -796,7 +796,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_delete,
             ))
             .await
@@ -807,7 +807,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &message_1.id().as_str()),
+                &format!("/api/{}", &message_1.id().as_str()),
             ))
             .await
             .unwrap();
@@ -817,7 +817,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &document.id().as_str()),
+                &format!("/api/{}", &document.id().as_str()),
             ))
             .await
             .unwrap();
@@ -842,7 +842,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &message,
             ))
             .await
@@ -853,7 +853,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_2),
+                &format!("/api/{}/actor/outbox", did_2),
                 &message_delete,
             ))
             .await
@@ -864,7 +864,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}", &message.id().as_str()),
+                &format!("/api/{}", &message.id().as_str()),
             ))
             .await
             .unwrap();
@@ -883,7 +883,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_1,
             ))
             .await
@@ -901,7 +901,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_2,
             ))
             .await
@@ -912,7 +912,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/following", did),
+                &format!("/api/{}/actor/following", did),
             ))
             .await
             .unwrap();
@@ -946,7 +946,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_2,
             ))
             .await
@@ -957,7 +957,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did),
+                &format!("/api/{}/actor/outbox", did),
                 &message_1,
             ))
             .await
@@ -982,7 +982,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_server),
+                &format!("/api/{}/actor/outbox", did_server),
                 &build_follow(vec![format!("{}/actor", did_1)], &jwk_server).await,
             ))
             .await
@@ -994,7 +994,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &build_message(
                     &jwk_1,
                     "id:1",
@@ -1011,7 +1011,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_2),
+                &format!("/api/{}/actor/inbox?pageSize=4", did_2),
             ))
             .await
             .unwrap();
@@ -1024,7 +1024,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_2),
+                &format!("/api/{}/actor/outbox", did_2),
                 &build_follow(vec![format!("{}/actor", did_server)], &jwk_2).await,
             ))
             .await
@@ -1036,7 +1036,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_2),
+                &format!("/api/{}/actor/inbox?pageSize=4", did_2),
             ))
             .await
             .unwrap();

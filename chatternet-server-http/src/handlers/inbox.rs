@@ -117,7 +117,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &message,
             ))
             .await
@@ -130,7 +130,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &message,
             ))
             .await
@@ -148,7 +148,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_2),
+                &format!("/api/{}/actor/outbox", did_2),
                 &message,
             ))
             .await
@@ -160,7 +160,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_1),
+                &format!("/api/{}/actor/inbox?pageSize=4", did_1),
             ))
             .await
             .unwrap();
@@ -185,7 +185,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &build_follow(vec![format!("{}/actor", did_2)], &jwk_1).await,
             ))
             .await
@@ -196,7 +196,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox?pageSize=4", did_1),
+                &format!("/api/{}/actor/inbox?pageSize=4", did_1),
             ))
             .await
             .unwrap();
@@ -216,7 +216,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!("/api/ap/{}/actor/inbox?pageSize=1", did_1),
+                &format!("/api/{}/actor/inbox?pageSize=1", did_1),
             ))
             .await
             .unwrap();
@@ -252,7 +252,7 @@ mod test {
             .clone()
             .oneshot(request_json(
                 "POST",
-                &format!("/api/ap/{}/actor/outbox", did_1),
+                &format!("/api/{}/actor/outbox", did_1),
                 &message,
             ))
             .await
@@ -264,10 +264,7 @@ mod test {
             .clone()
             .oneshot(request_empty(
                 "GET",
-                &format!(
-                    "/api/ap/{}/actor/inbox/from/{}/actor?pageSize=4",
-                    did_x, did_1
-                ),
+                &format!("/api/{}/actor/inbox/from/{}/actor?pageSize=4", did_x, did_1),
             ))
             .await
             .unwrap();
