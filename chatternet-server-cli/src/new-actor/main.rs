@@ -37,8 +37,11 @@ async fn main() -> Result<()> {
             })?
             .write_all(serde_json::to_string(&jwk)?.as_bytes())?;
     }
-    let jwk = serde_json::from_str(&fs::read_to_string(&args.path_key)?)?;
-    let did = did_from_jwk(&jwk)?;
+    let jwk = serde_json::from_str(
+        &fs::read_to_string(&args.path_key).map_err(|_| Error::msg("key does not exist"))?,
+    )
+    .map_err(|_| Error::msg("key is invalid"))?;
+    let did = did_from_jwk(&jwk).map_err(|_| Error::msg("key is cannot be parsed as a DID"))?;
     if args.url_base.ends_with('/') {
         Err(Error::msg("url base has a trailing /"))?;
     }
