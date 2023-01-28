@@ -4,9 +4,43 @@ use chatternet::{
     didkey::actor_id_from_did,
     model::{new_inbox, CollectionPageFields, MessageFields},
 };
+use tap::Pipe;
 
 use super::{error::AppError, AppState, CollectionPageQuery};
 use crate::db::{self, CollectionPageOut};
+
+fn build_inbox(
+    collection: Option<CollectionPageOut>,
+    actor_id: &str,
+    start_idx: Option<u64>,
+    page_size: u64,
+) -> Result<CollectionPageFields<MessageFields>, AppError> {
+    match collection {
+        Some(CollectionPageOut {
+            items: messages,
+            low_idx,
+            high_idx,
+        }) => {
+            let messages = messages
+                .iter()
+                .map(|x| serde_json::from_str(x).map_err(AnyError::new))
+                .collect::<Result<Vec<MessageFields>>>()
+                .map_err(|_| AppError::DbQueryFailed)?;
+            let start_idx = start_idx.unwrap_or(high_idx);
+            let next_start_idx = if low_idx > 0 && low_idx <= start_idx {
+                Some(low_idx - 1)
+            } else {
+                None
+            };
+            new_inbox(actor_id, messages, page_size, start_idx, next_start_idx)
+                .map_err(|_| AppError::ActorIdWrong)?
+        }
+        None => {
+            new_inbox(actor_id, vec![], page_size, 0, None).map_err(|_| AppError::ActorIdWrong)?
+        }
+    }
+    .pipe(Ok)
+}
 
 pub async fn handle_inbox(
     State(AppState { connector, .. }): State<AppState>,
@@ -23,26 +57,7 @@ pub async fn handle_inbox(
     let inbox_out = db::get_inbox_for_actor(&mut connection, &actor_id, page_size, query.start_idx)
         .await
         .map_err(|_| AppError::DbQueryFailed)?;
-    let inbox = match inbox_out {
-        Some(CollectionPageOut {
-            items: messages,
-            low_idx,
-            high_idx,
-        }) => {
-            let messages = messages
-                .iter()
-                .map(|x| serde_json::from_str(x).map_err(AnyError::new))
-                .collect::<Result<Vec<MessageFields>>>()
-                .map_err(|_| AppError::DbQueryFailed)?;
-            let start_idx = query.start_idx.unwrap_or(high_idx);
-            let next_start_idx = if low_idx > 0 { Some(low_idx - 1) } else { None };
-            new_inbox(&actor_id, messages, page_size, start_idx, next_start_idx)
-                .map_err(|_| AppError::ActorIdWrong)?
-        }
-        None => {
-            new_inbox(&actor_id, vec![], page_size, 0, None).map_err(|_| AppError::ActorIdWrong)?
-        }
-    };
+    let inbox = build_inbox(inbox_out, &actor_id, query.start_idx, page_size)?;
     Ok(Json(inbox))
 }
 
@@ -68,30 +83,7 @@ pub async fn handle_inbox_from(
     )
     .await
     .map_err(|_| AppError::DbQueryFailed)?;
-    let inbox = match inbox_out {
-        Some(CollectionPageOut {
-            items: messages,
-            low_idx,
-            high_idx,
-        }) => {
-            let messages = messages
-                .iter()
-                .map(|x| serde_json::from_str(x).map_err(AnyError::new))
-                .collect::<Result<Vec<MessageFields>>>()
-                .map_err(|_| AppError::DbQueryFailed)?;
-            let start_idx = query.start_idx.unwrap_or(high_idx);
-            let next_start_idx = if low_idx > 0 && low_idx < start_idx {
-                Some(low_idx - 1)
-            } else {
-                None
-            };
-            new_inbox(&actor_id, messages, page_size, start_idx, next_start_idx)
-                .map_err(|_| AppError::ActorIdWrong)?
-        }
-        None => {
-            new_inbox(&actor_id, vec![], page_size, 0, None).map_err(|_| AppError::ActorIdWrong)?
-        }
-    };
+    let inbox = build_inbox(inbox_out, &actor_id, query.start_idx, page_size)?;
     Ok(Json(inbox))
 }
 
@@ -105,6 +97,45 @@ mod test {
 
     use super::super::test_utils::*;
     use super::*;
+
+    #[tokio::test]
+    async fn builds_empty_inbox() {
+        let inbox = build_inbox(None, "did:example:123", None, 32).unwrap();
+        assert!(inbox.items().is_empty());
+    }
+
+    #[tokio::test]
+    async fn builds_inbox() {
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let message = build_message(&jwk, "id:1", None).await;
+        let inbox_out = CollectionPageOut {
+            items: vec![serde_json::to_string(&message).unwrap()],
+            low_idx: 1,
+            high_idx: 1,
+        };
+        let inbox = build_inbox(Some(inbox_out), "did:example:123", None, 32).unwrap();
+        assert_eq!(
+            inbox.items().first().unwrap().id().as_str(),
+            message.id().as_str()
+        );
+        assert_eq!(
+            inbox.next().as_ref().unwrap().as_str(),
+            "did:example:123/inbox?startIdx=0&pageSize=32"
+        );
+    }
+
+    #[tokio::test]
+    async fn builds_inbox_no_next() {
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let message = build_message(&jwk, "id:1", None).await;
+        let inbox_out = CollectionPageOut {
+            items: vec![serde_json::to_string(&message).unwrap()],
+            low_idx: 0,
+            high_idx: 0,
+        };
+        let inbox = build_inbox(Some(inbox_out), "did:example:123", None, 32).unwrap();
+        assert!(inbox.next().is_none());
+    }
 
     #[tokio::test]
     async fn api_inbox_returns_messages() {
