@@ -80,7 +80,11 @@ pub async fn handle_inbox_from(
                 .collect::<Result<Vec<MessageFields>>>()
                 .map_err(|_| AppError::DbQueryFailed)?;
             let start_idx = query.start_idx.unwrap_or(high_idx);
-            let next_start_idx = if low_idx > 0 { Some(low_idx - 1) } else { None };
+            let next_start_idx = if low_idx > 0 && low_idx < start_idx {
+                Some(low_idx - 1)
+            } else {
+                None
+            };
             new_inbox(&actor_id, messages, page_size, start_idx, next_start_idx)
                 .map_err(|_| AppError::ActorIdWrong)?
         }
