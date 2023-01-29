@@ -175,9 +175,6 @@ async fn handle_delete(
 ) -> Result<(), AppError> {
     // can delete only one document at a time
     let document_id = message.object().first().ok_or(AppError::MessageNotValid)?;
-    if message.object().len() != 1 {
-        Err(AppError::MessageNotValid)?
-    }
 
     // object to delete is the followers collection
     if document_id.as_str() == format!("{}/following", message.actor().as_str()) {
@@ -209,7 +206,6 @@ async fn handle_delete(
     }
 
     if let Ok(document_to_delete) = serde_json::from_str::<serde_json::Value>(&document) {
-        dbg!(&document_to_delete);
         // ensure the correct context to interpret the attributedTo member
         document_to_delete
             .get("@context")
