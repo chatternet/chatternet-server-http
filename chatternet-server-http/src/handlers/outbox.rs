@@ -2,7 +2,9 @@ use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
 use chatternet::didkey::{actor_id_from_did, did_from_jwk};
-use chatternet::model::{ActivityType, Message, MessageBuilder, MessageFields, Uri, VecUris};
+use chatternet::model::{
+    ActivityType, CtxStreamLast, Message, MessageBuilder, MessageFields, Uri, VecUris,
+};
 use sqlx::{Connection, SqliteConnection};
 use ssi::jwk::JWK;
 use tap::Pipe;
@@ -185,27 +187,50 @@ async fn handle_delete(
             &mut *connection,
         )
         .await?;
-        clear_followings(message, connection).await
+        clear_followings(message, connection).await?;
+        return Ok(());
     }
-    // object to delete is a document
-    else {
-        // the document to delete
-        let document = match db::get_document(&mut *connection, document_id.as_str())
-            .await
-            .map_err(|_| AppError::DbQueryFailed)?
-        {
-            Some(object) => object,
-            None => return Ok(()),
-        };
-        // can delete only messages
-        let message_to_delete: MessageFields =
-            serde_json::from_str(&document).map_err(|_| AppError::MessageNotValid)?;
+
+    let document = match db::get_document(&mut *connection, document_id.as_str())
+        .await
+        .map_err(|_| AppError::DbQueryFailed)?
+    {
+        Some(object) => object,
+        None => return Ok(()),
+    };
+
+    if let Ok(message_to_delete) = serde_json::from_str::<MessageFields>(&document) {
         // only the creator of a message can delete that message
         if message_to_delete.actor() != message.actor() {
             Err(AppError::MessageNotValid)?
         }
-        delete_message(&message_to_delete, connection).await
+        delete_message(&message_to_delete, connection).await?;
+        return Ok(());
     }
+
+    if let Ok(document_to_delete) = serde_json::from_str::<serde_json::Value>(&document) {
+        dbg!(&document_to_delete);
+        // ensure the correct context to interpret the attributedTo member
+        document_to_delete
+            .get("@context")
+            .and_then(|x| serde_json::from_value::<CtxStreamLast>(x.to_owned()).ok())
+            .ok_or(AppError::MessageNotValid)?;
+        // ensure attributed to the sender of the delete
+        let attributed_to = document_to_delete
+            .get("attributedTo")
+            .and_then(|x| x.as_str())
+            .and_then(|x| Uri::try_from(x).ok())
+            .ok_or(AppError::MessageNotValid)?;
+        if &attributed_to != message.actor() {
+            Err(AppError::MessageNotValid)?
+        }
+        db::delete_document(&mut *connection, document_id)
+            .await
+            .map_err(|_| AppError::DbQueryFailed)?;
+        return Ok(());
+    };
+
+    Err(AppError::MessageNotValid)
 }
 
 async fn store_message(
@@ -822,6 +847,77 @@ mod test {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn deletes_document() {
+        let api = build_test_api().await;
+
+        let jwk = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did = did_from_jwk(&jwk).unwrap();
+        let document = NoteMd1kFields::new(
+            "abc".to_string(),
+            format!("{}/actor", did).try_into().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let message = build_message(&jwk, document.id().as_str(), None).await;
+        let message_delete =
+            build_message_with_type(&jwk, ActivityType::Delete, document.id().as_str(), None).await;
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/{}/actor/outbox", did),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/{}", document.id().as_str()),
+                &document,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/{}", &document.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/{}/actor/outbox", did),
+                &message_delete,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!("/api/{}", &document.id().as_str()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
