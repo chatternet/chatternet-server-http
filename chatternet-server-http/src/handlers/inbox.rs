@@ -6,7 +6,7 @@ use chatternet::{
 };
 use tap::Pipe;
 
-use super::{error::AppError, AppState, CollectionPageQuery};
+use super::{error::AppError, AppState, CollectionPageQuery, InboxWithQuery};
 use crate::db::{self, CollectionPageOut};
 
 fn build_inbox(
@@ -78,6 +78,33 @@ pub async fn handle_inbox_from(
         &mut connection,
         &actor_id,
         from_actor_id.as_str(),
+        page_size,
+        query.start_idx,
+    )
+    .await
+    .map_err(|_| AppError::DbQueryFailed)?;
+    let inbox = build_inbox(inbox_out, &actor_id, query.start_idx, page_size)?;
+    Ok(Json(inbox))
+}
+
+pub async fn handle_inbox_with(
+    State(AppState { connector, .. }): State<AppState>,
+    Path(did): Path<String>,
+    Query(query): Query<InboxWithQuery>,
+) -> Result<Json<CollectionPageFields<MessageFields>>, AppError> {
+    let actor_id = actor_id_from_did(&did).map_err(|_| AppError::DidNotValid)?;
+    let page_size = query.page_size.unwrap_or(32);
+    let connector = connector.read().await;
+    let audiences: Vec<String> =
+        serde_json::from_str(&query.audiences).map_err(|_| AppError::ServerMisconfigured)?;
+    let mut connection = connector
+        .connection()
+        .await
+        .map_err(|_| AppError::DbConnectionFailed)?;
+    let inbox_out = db::get_inbox_with_audiences(
+        &mut connection,
+        &actor_id,
+        &audiences,
         page_size,
         query.start_idx,
     )
@@ -300,6 +327,63 @@ mod test {
             .oneshot(request_empty(
                 "GET",
                 &format!("/api/{}/actor/inbox/from/{}/actor?pageSize=4", did_x, did_1),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let inbox: CollectionPageFields<MessageFields> = get_body(response).await;
+        assert_eq!(
+            inbox
+                .items()
+                .iter()
+                .map(|x| x.object().iter().map(|x| x.as_str()))
+                .flatten()
+                .collect::<Vec<&str>>(),
+            ["id:1"]
+        );
+    }
+
+    #[tokio::test]
+    async fn api_inbox_returns_messages_with_audiences() {
+        let api = build_test_api().await;
+
+        let jwk_1 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let jwk_2 = build_jwk(&mut rand::thread_rng()).unwrap();
+        let did_1 = did_from_jwk(&jwk_1).unwrap();
+        let did_2 = did_from_jwk(&jwk_2).unwrap();
+
+        // did_1 follows did_2
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/{}/actor/outbox", did_1),
+                &build_follow(vec![format!("{}/actor", did_2)], &jwk_1).await,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let message = build_message(&jwk_2, "id:1", Some(vec!["id:x".to_string()])).await;
+        let response = api
+            .clone()
+            .oneshot(request_json(
+                "POST",
+                &format!("/api/{}/actor/outbox", did_2),
+                &message,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = api
+            .clone()
+            .oneshot(request_empty(
+                "GET",
+                &format!(
+                    "/api/{}/actor/inbox/with?audiences=%5B%22id%3Ax%22%5D&pageSize=4",
+                    did_1
+                ),
             ))
             .await
             .unwrap();

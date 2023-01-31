@@ -50,7 +50,7 @@ async fn build_inbox_messages<'a>(
     let mut rows = query.fetch(&mut *connection);
     let mut first_idx: Option<u64> = None;
     let mut last_idx: Option<u64> = None;
-    while let Some(row) = rows.try_next().await? {
+    while let Some(row) = rows.try_next().await.unwrap() {
         let message: &str = row.try_get("document")?;
         let idx: u32 = row.try_get("idx")?;
         messages.push(message.to_string());
@@ -79,18 +79,18 @@ pub async fn get_inbox_for_actor(
         INNER JOIN `Messages` \
         ON `Documents`.`document_id` = `Messages`.`message_id` \
         WHERE (\
-            `Messages`.`actor_id` = $1
+            `Messages`.`actor_id` = $1 \
             OR `Messages`.`actor_id` IN (\
                 SELECT `following_id` FROM `ActorsFollowings` \
-                WHERE `ActorsFollowings`.`actor_id` = $1
+                WHERE `ActorsFollowings`.`actor_id` = $1\
             )\
         )\
         AND `Messages`.`message_id` IN (\
             SELECT `message_id` FROM `MessagesAudiences` \
-            WHERE `MessagesAudiences`.`audience_id` = $1
+            WHERE `MessagesAudiences`.`audience_id` = $1 \
             OR `MessagesAudiences`.`audience_id` IN (\
                 SELECT `audience_id` FROM `ActorsAudiences` \
-                WHERE `ActorsAudiences`.`actor_id` = $1
+                WHERE `ActorsAudiences`.`actor_id` = $1\
             )\
         ) \
         {} \
@@ -98,9 +98,7 @@ pub async fn get_inbox_for_actor(
         LIMIT $2;\
         ",
         if start_idx.is_some() {
-            "\
-            AND `idx` <= $3 \
-            "
+            "AND `idx` <= $3"
         } else {
             ""
         }
@@ -132,11 +130,11 @@ pub async fn get_inbox_from_actor(
         WHERE `Messages`.`actor_id` = $2 \
         AND `Messages`.`message_id` IN (\
             SELECT `message_id` FROM `MessagesAudiences` \
-            WHERE `MessagesAudiences`.`audience_id` = $1
+            WHERE `MessagesAudiences`.`audience_id` = $1 \
             OR `MessagesAudiences`.`audience_id` = $2 || '/followers' \
             OR `MessagesAudiences`.`audience_id` IN (\
                 SELECT `audience_id` FROM `ActorsAudiences` \
-                WHERE `ActorsAudiences`.`actor_id` = $1
+                WHERE `ActorsAudiences`.`actor_id` = $1\
             )\
         ) \
         {} \
@@ -144,9 +142,7 @@ pub async fn get_inbox_from_actor(
         LIMIT $3;\
         ",
         if start_idx.is_some() {
-            "\
-            AND `idx` <= $4 \
-            "
+            "AND `idx` <= $4"
         } else {
             ""
         }
@@ -162,6 +158,63 @@ pub async fn get_inbox_from_actor(
             .bind(from_actor_id)
             .bind(i64::try_from(count)?),
     };
+    build_inbox_messages(query, connection).await
+}
+
+pub async fn get_inbox_with_audiences(
+    connection: &mut SqliteConnection,
+    actor_id: &str,
+    audiences: &Vec<String>,
+    count: u64,
+    start_idx: Option<u64>,
+) -> Result<Option<CollectionPageOut>> {
+    let audience_condition = if audiences.is_empty() {
+        "IS NULL".to_string()
+    } else if audiences.len() == 1 {
+        format!("= $3")
+    } else {
+        let audience_parameters = (0..audiences.len())
+            .map(|i| format!("${}", i + 3))
+            .collect::<Vec<String>>()
+            .join(", ");
+        format!("IN ({})", audience_parameters)
+    };
+    let query_str = format!(
+        "\
+        SELECT `idx`, `document` FROM `Documents` \
+        INNER JOIN `Messages` \
+        ON `Documents`.`document_id` = `Messages`.`message_id` \
+        WHERE (\
+            `Messages`.`actor_id` = $1 \
+            OR `Messages`.`actor_id` IN (\
+                SELECT `following_id` FROM `ActorsFollowings` \
+                WHERE `ActorsFollowings`.`actor_id` = $1\
+            )\
+        ) \
+        AND `Messages`.`message_id` IN (\
+            SELECT `message_id` FROM `MessagesAudiences` \
+            WHERE `MessagesAudiences`.`audience_id` {}\
+        ) \
+        {} \
+        ORDER BY `idx` DESC \
+        LIMIT $2;\
+        ",
+        audience_condition,
+        if start_idx.is_some() {
+            format!("AND `idx` <= ${}", audiences.len() + 3)
+        } else {
+            "".to_string()
+        }
+    );
+    let mut query = sqlx::query(&query_str)
+        .bind(actor_id)
+        .bind(i64::try_from(count)?);
+    for audience in audiences {
+        query = query.bind(audience.as_str());
+    }
+    if let Some(start_idx) = start_idx {
+        query = query.bind(u32::try_from(start_idx)?);
+    }
     build_inbox_messages(query, connection).await
 }
 
@@ -449,5 +502,100 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(out.items, ["message 1"]);
+    }
+
+    #[tokio::test]
+    async fn db_gets_inbox_with_audiences() {
+        let connector = Connector::new("sqlite::memory:").await.unwrap();
+        let mut connection = connector.connection().await.unwrap();
+
+        put_document(&mut connection, "id:1", "message 1")
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:1", "did:1/actor")
+            .await
+            .unwrap();
+        put_message_audience(&mut connection, "id:1", "did:1/actor/followers")
+            .await
+            .unwrap();
+
+        put_document(&mut connection, "id:2", "message 2")
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:2", "did:2/actor")
+            .await
+            .unwrap();
+        put_message_audience(&mut connection, "id:2", "tag:1/followers")
+            .await
+            .unwrap();
+
+        put_document(&mut connection, "id:3", "message 3")
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:3", "did:2/actor")
+            .await
+            .unwrap();
+        put_message_audience(&mut connection, "id:3", "tag:2/followers")
+            .await
+            .unwrap();
+
+        put_document(&mut connection, "id:4", "message 4")
+            .await
+            .unwrap();
+        put_message_id(&mut connection, "id:4", "did:3/actor")
+            .await
+            .unwrap();
+        put_message_audience(&mut connection, "id:4", "tag:1/followers")
+            .await
+            .unwrap();
+
+        // did:1 adds did:2 as a contact
+        put_actor_following(&mut connection, "did:1/actor", "did:2/actor")
+            .await
+            .unwrap();
+
+        assert!(
+            get_inbox_with_audiences(&mut connection, "did:1/actor", &vec![], 3, None)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let out = get_inbox_with_audiences(
+            &mut connection,
+            "did:1/actor",
+            &vec!["tag:1/followers".to_string()],
+            3,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(out.items, ["message 2"]);
+
+        let out = get_inbox_with_audiences(
+            &mut connection,
+            "did:1/actor",
+            &vec!["tag:1/followers".to_string(), "tag:2/followers".to_string()],
+            3,
+            None,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(out.items, ["message 3", "message 2"]);
+
+        // can paginate
+        let out = get_inbox_with_audiences(
+            &mut connection,
+            "did:1/actor",
+            &vec!["tag:1/followers".to_string(), "tag:2/followers".to_string()],
+            3,
+            Some(2),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(out.items, ["message 2"]);
     }
 }

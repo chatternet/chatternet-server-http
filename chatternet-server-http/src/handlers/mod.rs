@@ -43,6 +43,14 @@ pub struct CollectionPageQuery {
     start_idx: Option<u64>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxWithQuery {
+    audiences: String,
+    page_size: Option<u64>,
+    start_idx: Option<u64>,
+}
+
 pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
     const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -67,6 +75,7 @@ pub fn build_api(state: AppState, prefix: &str, _did: &str) -> Router {
                 .route("/:id/actor/outbox", post(handle_outbox))
                 .route("/:id/actor/inbox", get(handle_inbox))
                 .route("/:id/actor/inbox/from/:id2/actor", get(handle_inbox_from))
+                .route("/:id/actor/inbox/with", get(handle_inbox_with))
                 .route("/:id", get(handle_document_get).post(handle_document_post))
                 .route("/:id/createdBy/:id2/actor", get(handle_document_get_create)),
         )
